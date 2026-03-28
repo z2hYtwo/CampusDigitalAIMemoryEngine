@@ -2,30 +2,51 @@
 target/
 *.class
 
-# Maven 临时文件
-.mvn/wrapper/maven-wrapper.jar
+# Maven 临时文件 (Maven Wrapper 的 jar 必须保留，以便其他人直接运行)
+# .mvn/wrapper/maven-wrapper.jar
 .mvn/wrapper/maven-wrapper.properties
 
-# IDEA 个人配置 (通常不建议提交)
+# IDEA 个人配置 (必须排除，否则会把个人路径和配置带给队友)
 .idea/
 *.iml
 *.iws
 *.ipr
 .idea_modules/
+out/
+
+# BMAD 相关配置 (AI 助手规则文件)
+._bmad/
+._bmad-output/
+.trae/
+.cursor/
+.windsurf/
+
+# VS Code 配置 (如果有人用 VS Code)
+.vscode/
 
 # 系统临时文件
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# 本地数据存储 (避免提交 MinIO 的数据和向量库数据)
+# 本地数据存储与 OCR 数据 (避免提交 MinIO 的数据和本地扫描文件夹)
 volumes/
 tessdata/
 E:/ScannerDrop/
+temp/
+data/
 
-# 编译生成的 JAR
+# 编译生成的打包文件
 *.jar
 *.war
 *.ear
+*.pdf
 
-# 日志
+# 日志文件
 *.log
+logs/
+
+# 操作系统/开发环境临时文件
+*.tmp
+*.bak
+*.swp

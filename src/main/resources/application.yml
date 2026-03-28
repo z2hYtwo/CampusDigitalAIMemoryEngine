@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: cdame-ai-service
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+      enabled: true
+  datasource:
+    url: jdbc:mysql://localhost:3306/cdame?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=GMT%2B8&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    username: cdame_user
+    password: cdame_pass
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always # 首次启动建议用 always, 之后可改为 never
+      schema-locations: classpath:schema.sql
+      data-locations: classpath:data.sql
+  # h2:
+  #   console:
+  #     enabled: true
+  #     path: /h2-console
+
+# Milvus 配置
+milvus:
+  host: localhost
+  port: 19530
+  collection-name: campus_memory_v3 # 维度变化(1536->1024)建议更换集合名或清空旧集合
+  dimension: 1024 # Qwen text-embedding-v3 为 1024, OpenAI text-embedding-3-small 为 1536
+
+# OpenAI / DeepSeek 配置 (用于 Embedding 和 Chat)
+langchain4j:
+  open-ai:
+    api-key: ${AI_API_KEY:demo}
+    base-url: ${AI_BASE_URL:https://api.openai.com/v1}
+    embedding-model:
+      model-name: text-embedding-3-small
+    chat-model:
+      model-name: gpt-4o-mini
+      temperature: 0.7
+  embedding:
+    api-key: sk-59b58141744e434d9eeef93afe63bf21
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1/
+    model-name: text-embedding-v3
+  chat:
+    api-key: sk-59b58141744e434d9eeef93afe63bf21
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1/
+    model-name: qwen-plus
+
+# MinIO 配置
+minio:
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket-name: campus-assets
+
+ocr:
+  enabled: true
+  language: chi_sim+eng
+  tessdata-path: ${TESSDATA_PATH:E:/Tesseract/tessdata}
