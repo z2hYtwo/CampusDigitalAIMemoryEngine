@@ -38,6 +38,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.text.Normalizer;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -50,6 +51,7 @@ public class AssetService {
 
     private final MinioClient minioClient;
     private final MemoryService memoryService;
+    private final WhisperAsrService whisperAsrService;
 
     @Value("${minio.bucket-name}")
     private String bucketName;
@@ -59,12 +61,18 @@ public class AssetService {
     private String ocrLanguage;
     @Value("${ocr.tessdata-path:}")
     private String tessdataPath;
+    @Value("${memory.indexing.skip-low-info:true}")
+    private boolean skipLowInfoIndexing;
+    @Value("${memory.indexing.min-effective-chars:10}")
+    private int minEffectiveChars;
 
     private static final String ROLE_ADMIN = "admin";
     private static final String ROLE_TEACHER = "teacher";
     private static final Pattern OCR_NOISE_SEQUENCE = Pattern.compile("([`~^_=\\-|/\\\\·•.,:;!?])\\1{3,}");
     private static final Pattern OCR_WORD_CHAR = Pattern.compile("[\\p{IsHan}A-Za-z0-9]");
     private static final Pattern OCR_CJK_CHAR = Pattern.compile("[\\p{IsHan}]");
+    private static final Pattern OCR_COMBINING_MARK = Pattern.compile("\\p{M}+");
+    private record OcrResult(String text, int score) {}
 
     /**
      * 核心资产处理逻辑：MinIO 存储 -> OCR -> AI 分类与知识提取 -> 向量化入库
@@ -72,7 +80,7 @@ public class AssetService {
     public String processAsset(byte[] fileBytes, String fileName, String contentType,
                                String uploadRole, String effectiveUserId,
                                String requestedCategory, String sourceType,
-                               String description, Map<String, Object> honorMetadata,
+                               String description, Integer cameraQualityScore, Map<String, Object> honorMetadata,
                                AssetProcessor processor) throws Exception {
         
         String prefix = ("private".equalsIgnoreCase(uploadRole))
@@ -96,14 +104,24 @@ public class AssetService {
         // 2. 深度处理与向量化
         if (processor.isSupportedAsset(fileName)) {
             String extractedText = "";
+            String recognizedLanguage = null;
             if (processor.isImage(fileName)) {
                 extractedText = processor.extractImageText(fileBytes, fileName);
+            } else if (processor.isMultimedia(fileName)) {
+                WhisperAsrService.TranscriptionResult transcription = transcribeMultimediaSafely(fileBytes, fileName, contentType);
+                if (transcription != null) {
+                    extractedText = transcription.text();
+                    recognizedLanguage = transcription.language();
+                }
+                if (extractedText == null || extractedText.isBlank()) {
+                    extractedText = "多媒体资产: " + fileName + " (媒体类型: " + resolveMediaLabel(fileName) + ")";
+                }
             } else {
                 extractedText = processor.extractDocumentTextSafely(fileBytes, fileName);
             }
 
             // --- 创意 4 核心：AI 自动理解与分类 ---
-            Map<String, Object> aiResult = memoryService.classifyAsset(fileName, description, extractedText);
+            Map<String, Object> aiResult = memoryService.classifyAsset(fileName, description, extractedText, cameraQualityScore);
             
             String finalCategory = (aiResult != null && aiResult.containsKey("category")) 
                 ? (String) aiResult.get("category") 
@@ -115,6 +133,18 @@ public class AssetService {
 
             boolean isHonor = (aiResult != null && Boolean.TRUE.equals(aiResult.get("isHonor"))) 
                 || (honorMetadata != null);
+            String aiSummary = aiResult != null && aiResult.containsKey("summary")
+                ? Objects.toString(aiResult.get("summary"), "")
+                : "";
+            aiSummary = normalizeAiSummaryByQuality(aiSummary, cameraQualityScore);
+            if (aiResult != null && !aiSummary.isBlank()) {
+                aiResult.put("summary", aiSummary);
+            }
+            boolean hasIndexableContent = hasIndexableContent(extractedText, description, aiSummary, fileName, processor.isMultimedia(fileName));
+            if (skipLowInfoIndexing && !hasIndexableContent && !isHonor) {
+                log.info("资产缺少有效信息，跳过向量化: {}", fileName);
+                return "资产已上传，但未提取到有效内容，已跳过向量化入库";
+            }
 
             // 构造向量库元数据
             Map<String, Object> metadata = new java.util.HashMap<>();
@@ -123,6 +153,13 @@ public class AssetService {
             metadata.put("role", uploadRole);
             metadata.put("category", finalCategory);
             metadata.put("sourceType", processor.isMultimedia(fileName) ? "multimedia" : finalSourceType);
+            if (processor.isMultimedia(fileName)) {
+                metadata.put("mediaType", resolveMediaLabel(fileName));
+            }
+            if (recognizedLanguage != null && !recognizedLanguage.isBlank()) {
+                metadata.put("recognizedLanguage", recognizedLanguage);
+            }
+            if (cameraQualityScore != null) metadata.put("cameraQualityScore", cameraQualityScore);
             if (description != null) metadata.put("description", description);
             if (effectiveUserId != null) metadata.put("userId", effectiveUserId);
             if (aiResult != null && aiResult.containsKey("summary")) {
@@ -144,8 +181,18 @@ public class AssetService {
             }
             searchableText.append("文件名: ").append(fileName).append("\n");
             searchableText.append("分类: ").append(finalCategory).append("\n");
+            if (cameraQualityScore != null) {
+                searchableText.append("拍摄质量评分: ").append(cameraQualityScore).append("/100\n");
+            }
             if (extractedText != null && !extractedText.isBlank()) {
                 searchableText.append("内容: ").append(extractedText);
+            }
+            if (processor.isMultimedia(fileName)) {
+                searchableText.append("\n媒体类型: ").append(resolveMediaLabel(fileName));
+                searchableText.append("\n检索标签: ").append(resolveMediaLabel(fileName)).append(" 多媒体 校园素材");
+                if (recognizedLanguage != null && !recognizedLanguage.isBlank()) {
+                    searchableText.append("\n识别语言: ").append(recognizedLanguage);
+                }
             }
 
             // 3. 区分存入普通记忆还是荣誉墙
@@ -173,6 +220,60 @@ public class AssetService {
         }
 
         return "资产已上传，但该类型不支持内容提取";
+    }
+
+    private String normalizeAiSummaryByQuality(String aiSummary, Integer cameraQualityScore) {
+        if (aiSummary == null) return "";
+        String normalized = aiSummary.trim();
+        if (normalized.isBlank()) return normalized;
+        if (cameraQualityScore == null || cameraQualityScore < 80) return normalized;
+        return normalized
+            .replace("图像质量差", "拍摄质量评分较高")
+            .replace("拍摄质量差", "拍摄质量评分较高");
+    }
+
+    private boolean hasIndexableContent(String extractedText, String description, String aiSummary, String fileName, boolean multimediaAsset) {
+        if (isMeaningfulIndexText(extractedText)) return true;
+        if (isMeaningfulIndexText(aiSummary)) return true;
+        if (isMeaningfulIndexText(description)) return true;
+        if (!multimediaAsset && isMeaningfulIndexText(fileName)) return true;
+        return false;
+    }
+
+    private boolean isMeaningfulIndexText(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value
+            .replace("多媒体资产:", " ")
+            .replace("媒体类型:", " ")
+            .replace("检索标签:", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+        if (normalized.isBlank()) {
+            return false;
+        }
+        if (isLikelyGarbledOcr(normalized)) {
+            return false;
+        }
+        int infoChars = 0;
+        for (char c : normalized.toCharArray()) {
+            if (Character.isLetterOrDigit(c) || Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
+                infoChars++;
+            }
+        }
+        int threshold = Math.max(6, minEffectiveChars);
+        if (infoChars < threshold) {
+            return false;
+        }
+        String[] tokens = normalized.split("[\\s,，。！？；：、/|（）()\\[\\]【】<>《》]+");
+        int tokenCount = 0;
+        for (String token : tokens) {
+            if (token != null && token.trim().length() >= 2) {
+                tokenCount++;
+            }
+        }
+        return tokenCount >= 2 || infoChars >= threshold + 4;
     }
 
     /**
@@ -275,7 +376,9 @@ public class AssetService {
         if (fileName == null) return false;
         String lower = fileName.toLowerCase();
         return lower.endsWith(".mp4") || lower.endsWith(".mp3") || lower.endsWith(".wav")
-                || lower.endsWith(".avi") || lower.endsWith(".mov");
+                || lower.endsWith(".avi") || lower.endsWith(".mov")
+                || lower.endsWith(".m4a") || lower.endsWith(".ogg")
+                || lower.endsWith(".webm") || lower.endsWith(".mpeg") || lower.endsWith(".mpga");
     }
 
     public boolean isImage(String fileName) {
@@ -288,14 +391,21 @@ public class AssetService {
     public String resolveMediaLabel(String fileName) {
         if (fileName == null) return "多媒体";
         String lower = fileName.toLowerCase();
-        if (lower.endsWith(".mp4") || lower.endsWith(".avi") || lower.endsWith(".mov")) return "视频";
-        if (lower.endsWith(".mp3") || lower.endsWith(".wav")) return "音频";
+        if (lower.endsWith(".mp4") || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".webm")) return "视频";
+        if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".m4a") || lower.endsWith(".ogg") || lower.endsWith(".mpeg") || lower.endsWith(".mpga")) return "音频";
         return "多媒体";
     }
 
     public String extractDocumentTextSafely(byte[] fileBytes, String fileName) {
         String lowerName = fileName == null ? "" : fileName.toLowerCase();
         try {
+            if (isMultimedia(fileName)) {
+                WhisperAsrService.TranscriptionResult transcription = transcribeMultimediaSafely(fileBytes, fileName, resolveMediaContentType(fileName));
+                if (transcription != null && transcription.text() != null) {
+                    return transcription.text().trim();
+                }
+                return null;
+            }
             if (lowerName.endsWith(".pdf")) {
                 return extractPdfText(fileBytes, fileName);
             }
@@ -313,6 +423,29 @@ public class AssetService {
             log.warn("文档内容提取失败，将使用文件元数据参与向量化: {}", fileName, e);
             return null;
         }
+    }
+
+    private WhisperAsrService.TranscriptionResult transcribeMultimediaSafely(byte[] fileBytes, String fileName, String contentType) {
+        try {
+            return whisperAsrService.transcribe(fileBytes, fileName, contentType, null);
+        } catch (Exception e) {
+            log.warn("多媒体 Whisper 转写失败，回退文件元数据参与向量化: {}", fileName, e);
+            return null;
+        }
+    }
+
+    private String resolveMediaContentType(String fileName) {
+        if (fileName == null) return "application/octet-stream";
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".mp4")) return "video/mp4";
+        if (lower.endsWith(".avi")) return "video/x-msvideo";
+        if (lower.endsWith(".mov")) return "video/quicktime";
+        if (lower.endsWith(".mp3")) return "audio/mpeg";
+        if (lower.endsWith(".wav")) return "audio/wav";
+        if (lower.endsWith(".m4a")) return "audio/mp4";
+        if (lower.endsWith(".ogg")) return "audio/ogg";
+        if (lower.endsWith(".webm")) return "video/webm";
+        return "application/octet-stream";
     }
 
     private String extractPdfText(byte[] fileBytes, String fileName) {
@@ -659,52 +792,38 @@ public class AssetService {
                 log.warn("OCR 可用语言为空，跳过本次 OCR: fileName={}", fileName);
                 return "";
             }
-            
-            // --- 尝试加载语言，如果失败则尝试降级 ---
-            boolean languageLoaded = false;
-            String languageToTry = String.join("+", availableLanguages);
-            
             try {
-                tesseract.setLanguage(languageToTry);
-                languageLoaded = true;
-                log.info("OCR 使用语言: {}, tessdataPath={}", languageToTry, resolvedTessdataPath);
-            } catch (Throwable t) {
-                log.warn("OCR 加载语言组合 {} 失败，尝试降级加载: {}", languageToTry, t.getMessage());
-                // 尝试逐个加载，排除导致失败的语言 (通常是 _vert 语言)
-                List<String> fallbackLangs = new ArrayList<>();
-                for (String lang : availableLanguages) {
-                    try {
-                    tesseract.setLanguage(lang);
-                    fallbackLangs.add(lang);
-                } catch (Throwable ignored) {
-                    // Tesseract native library might print to stderr here, which is fine as we handle the fallback
-                    log.info("OCR 语言包 {} 加载失败或不存在，系统将自动尝试其他可用语言包", lang);
-                }
-                }
-                if (!fallbackLangs.isEmpty()) {
-                    languageToTry = String.join("+", fallbackLangs);
-                    tesseract.setLanguage(languageToTry);
-                    languageLoaded = true;
-                    log.info("OCR 最终降级使用语言: {}", languageToTry);
-                }
+                tesseract.setTessVariable("debug_file", "NUL");
+            } catch (Throwable ignored) {
             }
-
-            if (!languageLoaded) {
-                log.warn("OCR 无法加载任何可用语言，跳过本次 OCR: fileName={}", fileName);
-                return "";
-            }
-
-            if (!languageToTry.contains("chi") && containsCjk(fileName)) {
-                log.warn("OCR 缺少中文语言包且文件名包含中文，跳过 OCR 以避免乱码: fileName={}, language={}", fileName, languageToTry);
-                return "";
-            }
-            
             tesseract.setTessVariable("user_defined_dpi", "300");
             tesseract.setTessVariable("preserve_interword_spaces", "1");
             tesseract.setTessVariable("textord_tabfind_vertical_text", "0");
             BufferedImage enhanced = preprocessForOcr(image);
             BufferedImage binary = toBinaryImage(enhanced);
-            String normalized = pickBestOcrText(tesseract, image, enhanced, binary);
+            BufferedImage invertedBinary = shouldUseInvertedCandidate(enhanced) ? invertBinaryImage(binary) : null;
+            List<String> languageCandidates = buildOcrLanguageCandidates(availableLanguages);
+            String bestText = "";
+            int bestScore = Integer.MIN_VALUE;
+            for (String languageCandidate : languageCandidates) {
+                try {
+                    tesseract.setLanguage(languageCandidate);
+                } catch (Throwable ignored) {
+                    continue;
+                }
+                if (!languageCandidate.contains("chi") && containsCjk(fileName)) {
+                    continue;
+                }
+                OcrResult result = pickBestOcrText(tesseract, image, enhanced, binary, invertedBinary);
+                if (result.score() > bestScore) {
+                    bestScore = result.score();
+                    bestText = result.text();
+                }
+            }
+            if (bestText.isBlank()) {
+                return "";
+            }
+            String normalized = bestText;
             normalized = sanitizeHonorExtractedText(normalized);
             if (!normalized.isEmpty()) {
                 log.info("图片 OCR 完成: {}, 文本长度: {}", fileName, normalized.length());
@@ -775,6 +894,13 @@ public class AssetService {
         for (String language : raw) {
             String trimmed = language == null ? "" : language.trim();
             if (trimmed.isBlank()) continue;
+            if (trimmed.endsWith("_vert")) {
+                String fallback = trimmed.substring(0, trimmed.length() - "_vert".length());
+                if (!fallback.isBlank()) {
+                    languages.add(fallback);
+                }
+                continue;
+            }
             languages.add(trimmed);
         }
         if (languages.isEmpty()) {
@@ -811,17 +937,35 @@ public class AssetService {
         return new ArrayList<>(available);
     }
 
+    private List<String> buildOcrLanguageCandidates(List<String> availableLanguages) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        if (availableLanguages != null && !availableLanguages.isEmpty()) {
+            candidates.add(String.join("+", availableLanguages));
+            if (availableLanguages.contains("chi_sim") && availableLanguages.contains("eng")) {
+                candidates.add("chi_sim+eng");
+            }
+            if (availableLanguages.contains("eng")) {
+                candidates.add("eng");
+            }
+            if (availableLanguages.contains("chi_sim")) {
+                candidates.add("chi_sim");
+            }
+            candidates.addAll(availableLanguages);
+        }
+        return new ArrayList<>(candidates);
+    }
+
     private boolean hasValidTrainedData(String tessdataDir, String language) {
         if (tessdataDir == null || tessdataDir.isBlank() || language == null || language.isBlank()) return false;
         File trainedData = new File(tessdataDir, language + ".traineddata");
         return trainedData.exists() && trainedData.length() >= 256 * 1024;
     }
 
-    private String pickBestOcrText(Tesseract tesseract, BufferedImage original, BufferedImage enhanced, BufferedImage binary) {
+    private OcrResult pickBestOcrText(Tesseract tesseract, BufferedImage original, BufferedImage enhanced, BufferedImage binary, BufferedImage invertedBinary) {
         String best = "";
         int bestScore = Integer.MIN_VALUE;
-        int[] psmModes = new int[] {6, 11, 3};
-        BufferedImage[] candidates = new BufferedImage[] {enhanced, binary, original};
+        int[] psmModes = new int[] {6, 4, 11, 3};
+        BufferedImage[] candidates = new BufferedImage[] {enhanced, binary, invertedBinary, original};
         for (BufferedImage candidate : candidates) {
             if (candidate == null) continue;
             for (int psm : psmModes) {
@@ -833,11 +977,11 @@ public class AssetService {
                 }
             }
         }
-        if (best == null || best.isBlank()) return "";
+        if (best == null || best.isBlank()) return new OcrResult("", Integer.MIN_VALUE);
         if (bestScore < 25 || isLikelyGarbledOcr(best)) {
-            return "";
+            return new OcrResult("", bestScore);
         }
-        return best;
+        return new OcrResult(best, bestScore);
     }
 
     private String runOcr(Tesseract tesseract, BufferedImage image, int psmMode) {
@@ -901,9 +1045,13 @@ public class AssetService {
         }
         double wordRatio = (double) wordChars / Math.max(total, 1);
         double noiseRatio = (double) noiseChars / Math.max(total, 1);
+        int diacriticCount = countDiacriticMarks(normalized);
+        int latinExtendedCount = countLatinExtendedLetters(normalized);
+        double diacriticRatio = (double) diacriticCount / Math.max(total, 1);
         boolean hasMeaningfulLength = wordChars >= 8 || cjkChars >= 4;
         if (!hasMeaningfulLength) return true;
         if (wordRatio < 0.35) return true;
+        if (cjkChars < 2 && (diacriticRatio > 0.08 || latinExtendedCount >= 6)) return true;
         return noiseRatio > 0.28;
     }
 
@@ -946,9 +1094,36 @@ public class AssetService {
         }
         int len = text.length();
         int info = cjk * 4 + alphaNum * 2 + punct;
-        int penalties = noise * 5 + repeatPenalty * 8;
+        int diacriticPenalty = countDiacriticMarks(text) * 6;
+        int latinExtendedPenalty = countLatinExtendedLetters(text) * 4;
+        int penalties = noise * 5 + repeatPenalty * 8 + diacriticPenalty + latinExtendedPenalty;
         int shortPenalty = len < 8 ? 20 : 0;
         return info + len - penalties - shortPenalty;
+    }
+
+    private int countDiacriticMarks(String text) {
+        if (text == null || text.isBlank()) return 0;
+        String nfd = Normalizer.normalize(text, Normalizer.Form.NFD);
+        int count = 0;
+        for (char c : nfd.toCharArray()) {
+            if (OCR_COMBINING_MARK.matcher(String.valueOf(c)).matches()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int countLatinExtendedLetters(String text) {
+        if (text == null || text.isBlank()) return 0;
+        int count = 0;
+        for (char c : text.toCharArray()) {
+            if (!Character.isLetter(c)) continue;
+            if (Character.UnicodeScript.of(c) != Character.UnicodeScript.LATIN) continue;
+            if (c > 127) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private BufferedImage preprocessForOcr(BufferedImage source) {
@@ -963,22 +1138,69 @@ public class AssetService {
         g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
         g.drawImage(source, 0, 0, targetWidth, targetHeight, null);
         g.dispose();
-        return gray;
+        return stretchGrayLevels(gray);
+    }
+
+    private BufferedImage stretchGrayLevels(BufferedImage gray) {
+        if (gray == null) return null;
+        int width = gray.getWidth();
+        int height = gray.getHeight();
+        int[] histogram = new int[256];
+        int total = Math.max(width * height, 1);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int v = gray.getRaster().getSample(x, y, 0);
+                histogram[Math.max(0, Math.min(255, v))]++;
+            }
+        }
+        int lowTarget = (int) (total * 0.02);
+        int highTarget = (int) (total * 0.98);
+        int low = 0;
+        int high = 255;
+        int cumulative = 0;
+        for (int i = 0; i < 256; i++) {
+            cumulative += histogram[i];
+            if (cumulative >= lowTarget) {
+                low = i;
+                break;
+            }
+        }
+        cumulative = 0;
+        for (int i = 0; i < 256; i++) {
+            cumulative += histogram[i];
+            if (cumulative >= highTarget) {
+                high = i;
+                break;
+            }
+        }
+        if (high <= low + 8) {
+            return gray;
+        }
+        BufferedImage stretched = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int v = gray.getRaster().getSample(x, y, 0);
+                int nv = (v - low) * 255 / Math.max(1, high - low);
+                nv = Math.max(0, Math.min(255, nv));
+                stretched.getRaster().setSample(x, y, 0, nv);
+            }
+        }
+        return stretched;
     }
 
     private BufferedImage toBinaryImage(BufferedImage gray) {
         if (gray == null) return null;
         int width = gray.getWidth();
         int height = gray.getHeight();
-        int total = width * height;
-        long sum = 0;
+        int[] histogram = new int[256];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int v = gray.getRaster().getSample(x, y, 0);
-                sum += v;
+                histogram[Math.max(0, Math.min(255, v))]++;
             }
         }
-        int threshold = (int) Math.max(80, Math.min(190, sum / Math.max(total, 1)));
+        int threshold = otsuThreshold(histogram, width * height);
+        threshold = Math.max(70, Math.min(205, threshold));
         BufferedImage binary = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_BINARY);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
@@ -988,6 +1210,68 @@ public class AssetService {
             }
         }
         return binary;
+    }
+
+    private int otsuThreshold(int[] histogram, int totalPixels) {
+        if (histogram == null || histogram.length != 256 || totalPixels <= 0) {
+            return 128;
+        }
+        long sum = 0;
+        for (int t = 0; t < 256; t++) {
+            sum += (long) t * histogram[t];
+        }
+        long sumBackground = 0;
+        int weightBackground = 0;
+        double maxVariance = -1;
+        int threshold = 128;
+        for (int t = 0; t < 256; t++) {
+            weightBackground += histogram[t];
+            if (weightBackground == 0) continue;
+            int weightForeground = totalPixels - weightBackground;
+            if (weightForeground == 0) break;
+            sumBackground += (long) t * histogram[t];
+            double meanBackground = (double) sumBackground / weightBackground;
+            double meanForeground = (double) (sum - sumBackground) / weightForeground;
+            double betweenVariance = (double) weightBackground * weightForeground * (meanBackground - meanForeground) * (meanBackground - meanForeground);
+            if (betweenVariance > maxVariance) {
+                maxVariance = betweenVariance;
+                threshold = t;
+            }
+        }
+        return threshold;
+    }
+
+    private boolean shouldUseInvertedCandidate(BufferedImage gray) {
+        if (gray == null) return false;
+        int width = gray.getWidth();
+        int height = gray.getHeight();
+        if (width <= 0 || height <= 0) return false;
+        long sum = 0;
+        int stepX = Math.max(1, width / 320);
+        int stepY = Math.max(1, height / 320);
+        int count = 0;
+        for (int y = 0; y < height; y += stepY) {
+            for (int x = 0; x < width; x += stepX) {
+                sum += gray.getRaster().getSample(x, y, 0);
+                count++;
+            }
+        }
+        double mean = (double) sum / Math.max(1, count);
+        return mean < 118;
+    }
+
+    private BufferedImage invertBinaryImage(BufferedImage binary) {
+        if (binary == null) return null;
+        int width = binary.getWidth();
+        int height = binary.getHeight();
+        BufferedImage inverted = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_BINARY);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int rgb = binary.getRGB(x, y) & 0x00FFFFFF;
+                inverted.setRGB(x, y, rgb == 0x000000 ? 0xFFFFFFFF : 0xFF000000);
+            }
+        }
+        return inverted;
     }
 
     public String normalize(String value) {
@@ -1029,4 +1313,3 @@ public class AssetService {
         return parts[1];
     }
 }
-

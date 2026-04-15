@@ -17,7 +17,8 @@ import {
   Loader2,
   Upload,
   Link as LinkIcon,
-  GraduationCap
+  GraduationCap,
+  Camera
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 
@@ -32,12 +33,13 @@ interface NavbarProps {
   user: { username: string; role: string } | null;
   onLogout: () => void;
   onLogin?: () => void;
-  // 新增管理功能的 props
   onSync?: () => void;
   onUpload?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onAddLink?: () => void;
+  onCameraScan?: () => void;
   isSyncing?: boolean;
   isUploading?: boolean;
+  isCameraScanning?: boolean;
 }
 
 export function Navbar({ 
@@ -47,8 +49,10 @@ export function Navbar({
   onSync, 
   onUpload, 
   onAddLink, 
+  onCameraScan,
   isSyncing, 
-  isUploading 
+  isUploading,
+  isCameraScanning
 }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
@@ -92,7 +96,7 @@ export function Navbar({
     }] : []),
     { label: '政策查询', icon: <Shield size={20} />, path: '/policies' },
     ...(!user ? [{ label: '专业介绍', icon: <GraduationCap size={20} />, path: '/majors' }] : []),
-    ...(user ? [{ label: '私人空间', icon: <User size={20} />, path: '/private' }] : []),
+    ...(user && user.role !== 'admin' ? [{ label: '私人空间', icon: <User size={20} />, path: '/private' }] : []),
   ];
 
   const toggleSubmenu = (label: string) => {
@@ -238,7 +242,6 @@ export function Navbar({
                           {isUploading ? '正在上传...' : '批量导入校史记忆'}
                         </button>
                         <input ref={uploadInputRef} type="file" multiple className="hidden" onChange={onUpload} disabled={isUploading} accept=".pdf,.ppt,.pptx,.docx,.txt,.doc,.jpg,.jpeg,.png,.webp,.mp4,.mp3,.wav,.avi,.mov" />
-
                         <button
                           onClick={onAddLink}
                           disabled={isUploading}
@@ -249,6 +252,18 @@ export function Navbar({
                           </div>
                           收录外部链接
                         </button>
+                        {user?.role === 'admin' && (
+                          <button
+                            onClick={onCameraScan}
+                            disabled={isCameraScanning}
+                            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                          >
+                            <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                              {isCameraScanning ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                            </div>
+                            {isCameraScanning ? '摄像头启动中...' : '摄像头扫描入库'}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

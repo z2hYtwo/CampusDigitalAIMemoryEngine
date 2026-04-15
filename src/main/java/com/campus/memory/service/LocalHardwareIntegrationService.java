@@ -111,6 +111,7 @@ public class LocalHardwareIntegrationService {
                     "General", 
                     "official", 
                     "来自本地物理扫描仪的自动入库", 
+                    null,
                     null, 
                     assetService.new DefaultAssetProcessor()
             );

@@ -2,6 +2,7 @@ package com.campus.memory.controller;
 
 import com.campus.memory.service.AssetService;
 import com.campus.memory.service.MemoryService;
+import com.campus.memory.service.WhisperAsrService;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.parser.apache.tika.ApacheTikaDocumentParser;
 import io.minio.MinioClient;
@@ -14,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.text.Normalizer;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -74,6 +76,7 @@ public class AssetController {
     private final MinioClient minioClient;
     private final MemoryService memoryService;
     private final AssetService assetService;
+    private final WhisperAsrService whisperAsrService;
 
     @Value("${minio.bucket-name}")
     private String bucketName;
@@ -85,12 +88,96 @@ public class AssetController {
     private String tessdataPath;
 
     /**
+     * 语音输入接口 (ASR + AI 语义理解)
+     * 模拟移动端或终端设备发送语音文件，系统自动识别并回答
+     */
+    @PostMapping("/multimodal/voice")
+    public ResponseEntity<Map<String, Object>> voiceInput(@RequestParam("file") MultipartFile file,
+                                                        @RequestParam(name = "sessionId", required = false) String sessionId,
+                                                        @RequestParam(name = "language", required = false) String language) {
+        log.info("收到语音输入: {}, 大小: {} bytes", file.getOriginalFilename(), file.getSize());
+        try {
+            WhisperAsrService.TranscriptionResult transcription = whisperAsrService.transcribe(file, language);
+            String answer = memoryService.chat(sessionId, transcription.text());
+            return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "recognizedText", transcription.text(),
+                "recognizedLanguage", transcription.language(),
+                "answer", answer,
+                "provider", "whisper",
+                "type", "voice"
+            ));
+        } catch (Exception e) {
+            log.error("语音输入处理失败", e);
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+                "status", "error",
+                "message", e.getMessage(),
+                "type", "voice"
+            ));
+        }
+    }
+
+    @PostMapping("/multimodal/voice/transcribe")
+    public ResponseEntity<Map<String, Object>> voiceTranscribe(@RequestParam("file") MultipartFile file,
+                                                                @RequestParam(name = "language", required = false) String language) {
+        log.info("收到语音转写请求: {}, 大小: {} bytes", file.getOriginalFilename(), file.getSize());
+        try {
+            WhisperAsrService.TranscriptionResult transcription = whisperAsrService.transcribe(file, language);
+            return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "recognizedText", transcription.text(),
+                "recognizedLanguage", transcription.language(),
+                "provider", "whisper",
+                "type", "voice"
+            ));
+        } catch (Exception e) {
+            log.error("语音转写失败", e);
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+                "status", "error",
+                "message", e.getMessage(),
+                "type", "voice"
+            ));
+        }
+    }
+
+    /**
+     * 视觉输入接口 (OCR + AI 深度分类)
+     * 模拟摄像头或手机拍照上传，系统自动识别内容并归档
+     */
+    @PostMapping("/multimodal/vision")
+    public ResponseEntity<Map<String, Object>> visionInput(@RequestParam("file") MultipartFile file,
+                                                         @RequestParam(name = "description", required = false) String description) {
+        log.info("收到视觉输入: {}, 大小: {} bytes", file.getOriginalFilename(), file.getSize());
+        try {
+            byte[] bytes = file.getBytes();
+            String fileName = file.getOriginalFilename();
+            
+            // 执行 OCR 识别
+            String extractedText = extractImageText(bytes, fileName);
+            
+            // 调用 AI 资产分类引擎提取结构化知识
+            Map<String, Object> aiKnowledge = memoryService.classifyAsset(fileName, description, extractedText);
+            
+            return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "extractedText", extractedText != null ? extractedText : "",
+                "aiKnowledge", aiKnowledge != null ? aiKnowledge : Map.of(),
+                "type", "vision"
+            ));
+        } catch (Exception e) {
+            log.error("视觉输入处理失败", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("status", "error", "message", e.getMessage()));
+        }
+    }
+
+    /**
      * 物理终端扫描回调 (反向入库)
      * 模拟扫描仪扫完文档后自动上传并触发 AI 深度理解与分类
      */
     @PostMapping("/physical/scan-callback")
     public Map<String, Object> scanCallback(@RequestParam(name = "file") MultipartFile file,
                                            @RequestParam(name = "deviceId", defaultValue = "SCANNER-001") String deviceId,
+                                           @RequestParam(name = "qualityScore", required = false) Integer qualityScore,
                                            @RequestParam(name = "honorLevel", required = false) String honorLevel,
                                            @RequestParam(name = "honorCategory", required = false) String honorCategory,
                                            @RequestParam(name = "honorYear", required = false) String honorYear) {
@@ -120,6 +207,7 @@ public class AssetController {
                     "auto",   // category
                     "official", // sourceType
                     "由物理终端 " + deviceId + " 扫描入库", // description
+                    qualityScore,
                     honorMetadata,
                     assetService.new DefaultAssetProcessor()
             );
@@ -131,10 +219,12 @@ public class AssetController {
     }
 
     private static final String ROLE_ADMIN = "admin";
+    private static final String ROLE_STUDENT = "student";
     private static final String ROLE_TEACHER = "teacher";
     private static final Pattern OCR_NOISE_SEQUENCE = Pattern.compile("([`~^_=\\-|/\\\\·•.,:;!?])\\1{3,}");
     private static final Pattern OCR_WORD_CHAR = Pattern.compile("[\\p{IsHan}A-Za-z0-9]");
     private static final Pattern OCR_CJK_CHAR = Pattern.compile("[\\p{IsHan}]");
+    private static final Pattern OCR_COMBINING_MARK = Pattern.compile("\\p{M}+");
     private final java.util.concurrent.Semaphore slideRenderSemaphore = new java.util.concurrent.Semaphore(1);
 
     /**
@@ -254,8 +344,9 @@ public class AssetController {
         String effectiveRequesterId = normalize(requesterId);
         String effectiveRequesterRole = normalizeRole(requesterRole);
         boolean honorObject = isHonorObject(effectiveObjectName);
-        if (honorObject && !ROLE_ADMIN.equalsIgnoreCase(effectiveRequesterRole)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("无权限删除荣誉文件，仅管理员可操作");
+        boolean campusHonorObject = isCampusHonorObject(effectiveObjectName);
+        if (campusHonorObject && !ROLE_ADMIN.equalsIgnoreCase(effectiveRequesterRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("无权限删除校园荣誉文件，仅管理员可操作");
         }
         if (!canAccessObject(effectiveObjectName, effectiveRequesterId, effectiveRequesterRole)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("无权限删除该文件");
@@ -556,6 +647,10 @@ public class AssetController {
         if (lower.endsWith(".mp4")) return "video/mp4";
         if (lower.endsWith(".mp3")) return "audio/mpeg";
         if (lower.endsWith(".wav")) return "audio/wav";
+        if (lower.endsWith(".m4a")) return "audio/mp4";
+        if (lower.endsWith(".ogg")) return "audio/ogg";
+        if (lower.endsWith(".webm")) return "video/webm";
+        if (lower.endsWith(".mpeg") || lower.endsWith(".mpga")) return "audio/mpeg";
         if (lower.endsWith(".avi")) return "video/x-msvideo";
         if (lower.endsWith(".mov")) return "video/quicktime";
         return "text/plain";
@@ -570,6 +665,7 @@ public class AssetController {
                              @RequestParam(name = "sourceType", defaultValue = "official") String sourceType,
                              @RequestParam(name = "category", defaultValue = "auto") String category,
                              @RequestParam(name = "description", required = false) String description,
+                             @RequestParam(name = "qualityScore", required = false) Integer qualityScore,
                              @RequestParam(name = "userId", required = false) String userId,
                              @RequestHeader(name = "X-User-Id", required = false) String requesterId,
                              @RequestHeader(name = "X-User-Role", required = false) String requesterRole) {
@@ -589,6 +685,12 @@ public class AssetController {
         if (!"private".equalsIgnoreCase(uploadRole) && !isManagerRole(effectiveRequesterRole)) {
             return "上传失败: 仅教师或管理员可上传公共文档";
         }
+        boolean honorUpload = "honor".equalsIgnoreCase(sourceType)
+            || "校园荣誉".equalsIgnoreCase(category)
+            || (category != null && category.toLowerCase().contains("honor"));
+        if (honorUpload && !"private".equalsIgnoreCase(uploadRole) && !ROLE_ADMIN.equalsIgnoreCase(effectiveRequesterRole)) {
+            return "上传失败: 仅管理员可上传校园荣誉";
+        }
 
         try {
             return assetService.processAsset(
@@ -600,6 +702,7 @@ public class AssetController {
                     category,
                     sourceType,
                     description,
+                    qualityScore,
                     null,
                     assetService.new DefaultAssetProcessor()
             );
@@ -615,6 +718,7 @@ public class AssetController {
                                                 @RequestParam(name = "honorCategory") String honorCategory,
                                                 @RequestParam(name = "timestamp", required = false) String timestamp,
                                                 @RequestParam(name = "description", required = false) String description,
+                                                @RequestParam(name = "qualityScore", required = false) Integer qualityScore,
                                                 @RequestParam(name = "role", defaultValue = "all") String role,
                                                 @RequestParam(name = "userId", required = false) String userId,
                                                 @RequestHeader(name = "X-User-Id", required = false) String requesterId,
@@ -626,17 +730,24 @@ public class AssetController {
         String effectiveRequesterId = normalize(requesterId);
         String effectiveRequesterRole = normalizeRole(requesterRole);
         String uploadRole = normalizeRole(role);
-        if (!ROLE_ADMIN.equalsIgnoreCase(effectiveRequesterRole)) {
-            return Map.of("message", "上传失败: 仅管理员可上传校园荣誉");
-        }
         String effectiveUserId = (effectiveRequesterId != null && !effectiveRequesterId.isBlank())
                 ? effectiveRequesterId
                 : normalize(userId);
-        if ("private".equalsIgnoreCase(uploadRole) && (effectiveUserId == null || effectiveUserId.isBlank())) {
+        boolean privateHonor = "private".equalsIgnoreCase(uploadRole);
+        if (privateHonor && (effectiveUserId == null || effectiveUserId.isBlank())) {
             return Map.of("message", "上传失败: 私有荣誉文件缺少用户身份");
         }
-        if (!"private".equalsIgnoreCase(uploadRole) && !isManagerRole(effectiveRequesterRole)) {
-            return Map.of("message", "上传失败: 仅教师或管理员可上传公共荣誉文件");
+        if (privateHonor) {
+            if (!(ROLE_STUDENT.equalsIgnoreCase(effectiveRequesterRole)
+                || ROLE_TEACHER.equalsIgnoreCase(effectiveRequesterRole)
+                || ROLE_ADMIN.equalsIgnoreCase(effectiveRequesterRole))) {
+                return Map.of("message", "上传失败: 当前角色不允许上传私人荣誉");
+            }
+            if (effectiveRequesterId == null || !effectiveRequesterId.equals(effectiveUserId)) {
+                return Map.of("message", "上传失败: 仅允许操作自己的私人荣誉");
+            }
+        } else if (!ROLE_ADMIN.equalsIgnoreCase(effectiveRequesterRole)) {
+            return Map.of("message", "上传失败: 仅管理员可上传校园荣誉");
         }
 
         try {
@@ -656,6 +767,7 @@ public class AssetController {
                     "校园荣誉",
                     "honor",
                     description,
+                    qualityScore,
                     honorMetadata,
                     assetService.new DefaultAssetProcessor()
             );
@@ -749,9 +861,9 @@ public class AssetController {
                         String fileName = objectName.contains("-") ? objectName.substring(objectName.indexOf("-") + 1) : objectName;
                         String text;
                         if (isImage(fileName)) {
-                            text = extractImageText(bytes, fileName);
+                            text = assetService.extractImageText(bytes, fileName);
                         } else {
-                            text = extractDocumentTextSafely(bytes, fileName);
+                            text = assetService.extractDocumentTextSafely(bytes, fileName);
                         }
 
                         if ((text == null || text.trim().isEmpty()) && isMultimedia(fileName)) {
@@ -825,12 +937,16 @@ public class AssetController {
     }
 
     private boolean hasPrivateAccess(String requesterId, String requesterRole, String requestedUserId) {
+        if (ROLE_ADMIN.equalsIgnoreCase(requesterRole)) {
+            return false;
+        }
         return requesterId != null && requesterId.equals(requestedUserId);
     }
 
     private boolean canAccessObject(String objectName, String requesterId, String requesterRole) {
         if (objectName == null || objectName.isBlank()) return false;
         if (!objectName.startsWith("private/")) return true;
+        if (ROLE_ADMIN.equalsIgnoreCase(requesterRole)) return false;
         String ownerId = extractOwnerId(objectName);
         return ownerId != null && ownerId.equals(requesterId);
     }
@@ -838,6 +954,12 @@ public class AssetController {
     private boolean isHonorObject(String objectName) {
         if (objectName == null || objectName.isBlank()) return false;
         return objectName.startsWith("public/honor/") || objectName.contains("/honor/");
+    }
+
+    private boolean isCampusHonorObject(String objectName) {
+        if (objectName == null || objectName.isBlank()) return false;
+        String normalized = objectName.toLowerCase();
+        return normalized.startsWith("public/honor/") || (normalized.contains("/honor/") && !normalized.startsWith("private/"));
     }
 
     private boolean isObjectNotFoundError(Exception e) {
@@ -921,14 +1043,16 @@ public class AssetController {
         if (fileName == null) return false;
         String lower = fileName.toLowerCase();
         return lower.endsWith(".mp4") || lower.endsWith(".mp3") || lower.endsWith(".wav")
-                || lower.endsWith(".avi") || lower.endsWith(".mov");
+                || lower.endsWith(".avi") || lower.endsWith(".mov")
+                || lower.endsWith(".m4a") || lower.endsWith(".ogg")
+                || lower.endsWith(".webm") || lower.endsWith(".mpeg") || lower.endsWith(".mpga");
     }
 
     private String resolveMediaLabel(String fileName) {
         if (fileName == null) return "多媒体";
         String lower = fileName.toLowerCase();
-        if (lower.endsWith(".mp4") || lower.endsWith(".avi") || lower.endsWith(".mov")) return "视频";
-        if (lower.endsWith(".mp3") || lower.endsWith(".wav")) return "音频";
+        if (lower.endsWith(".mp4") || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".webm")) return "视频";
+        if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".m4a") || lower.endsWith(".ogg") || lower.endsWith(".mpeg") || lower.endsWith(".mpga")) return "音频";
         return "多媒体";
     }
 
@@ -1311,6 +1435,10 @@ public class AssetController {
                 return "";
             }
             tesseract.setLanguage(finalLanguage);
+            try {
+                tesseract.setTessVariable("debug_file", "NUL");
+            } catch (Throwable ignored) {
+            }
             log.info("OCR 使用语言: {}, tessdataPath={}", finalLanguage, resolvedTessdataPath);
             
             tesseract.setTessVariable("user_defined_dpi", "300");
@@ -1522,9 +1650,13 @@ public class AssetController {
         }
         double wordRatio = (double) wordChars / Math.max(total, 1);
         double noiseRatio = (double) noiseChars / Math.max(total, 1);
+        int diacriticCount = countDiacriticMarks(normalized);
+        int latinExtendedCount = countLatinExtendedLetters(normalized);
+        double diacriticRatio = (double) diacriticCount / Math.max(total, 1);
         boolean hasMeaningfulLength = wordChars >= 8 || cjkChars >= 4;
         if (!hasMeaningfulLength) return true;
         if (wordRatio < 0.35) return true;
+        if (cjkChars < 2 && (diacriticRatio > 0.08 || latinExtendedCount >= 6)) return true;
         return noiseRatio > 0.28;
     }
 
@@ -1567,9 +1699,36 @@ public class AssetController {
         }
         int len = text.length();
         int info = cjk * 4 + alphaNum * 2 + punct;
-        int penalties = noise * 5 + repeatPenalty * 8;
+        int diacriticPenalty = countDiacriticMarks(text) * 6;
+        int latinExtendedPenalty = countLatinExtendedLetters(text) * 4;
+        int penalties = noise * 5 + repeatPenalty * 8 + diacriticPenalty + latinExtendedPenalty;
         int shortPenalty = len < 8 ? 20 : 0;
         return info + len - penalties - shortPenalty;
+    }
+
+    private int countDiacriticMarks(String text) {
+        if (text == null || text.isBlank()) return 0;
+        String nfd = Normalizer.normalize(text, Normalizer.Form.NFD);
+        int count = 0;
+        for (char c : nfd.toCharArray()) {
+            if (OCR_COMBINING_MARK.matcher(String.valueOf(c)).matches()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int countLatinExtendedLetters(String text) {
+        if (text == null || text.isBlank()) return 0;
+        int count = 0;
+        for (char c : text.toCharArray()) {
+            if (!Character.isLetter(c)) continue;
+            if (Character.UnicodeScript.of(c) != Character.UnicodeScript.LATIN) continue;
+            if (c > 127) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private BufferedImage preprocessForOcr(BufferedImage source) {

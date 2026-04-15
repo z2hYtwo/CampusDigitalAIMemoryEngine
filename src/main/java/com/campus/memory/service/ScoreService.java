@@ -39,6 +39,9 @@ public class ScoreService {
         if (!canAccessDataTools()) {
             return NO_ACCESS;
         }
+        if (isStudentRole(OrchestrationContext.getUserRole())) {
+            return NO_ACCESS;
+        }
         try {
             String sql = "SELECT DISTINCT name FROM students LIMIT 101";
             List<String> students = jdbcTemplate.queryForList(sql, String.class);
@@ -81,6 +84,9 @@ public class ScoreService {
                     "found", false,
                     "message", "未找到该学生的成绩记录"
                 );
+            }
+            if (!canAccessStudentScope(student.studentId())) {
+                return NO_ACCESS;
             }
             String sql = "SELECT s.student_id, s.name, c.course_name, sc.score, sc.credits, sc.gpa " +
                          "FROM students s " +
@@ -217,6 +223,9 @@ public class ScoreService {
                     "message", "未找到该学生的学籍资料，请确认学号或姓名是否正确"
                 );
             }
+            if (!canAccessStudentScope(student.studentId())) {
+                return NO_ACCESS;
+            }
             String sql = "SELECT student_id, name, gender, department, major, birthday, ethnicity, political_status " +
                          "FROM students WHERE student_id = ?";
             List<Map<String, Object>> results = jdbcTemplate.queryForList(sql, student.studentId());
@@ -253,6 +262,9 @@ public class ScoreService {
         if (!canAccessDataTools()) {
             return NO_ACCESS;
         }
+        if (isStudentRole(OrchestrationContext.getUserRole())) {
+            return NO_ACCESS;
+        }
         try {
             String studentCountSql = "SELECT COUNT(*) FROM students";
             Integer studentCount = jdbcTemplate.queryForObject(studentCountSql, Integer.class);
@@ -285,6 +297,9 @@ public class ScoreService {
         try {
             String normalizedRole = role == null ? "" : role.trim().toLowerCase();
             String normalizedUserId = userId == null ? "" : userId.trim();
+            if ("student".equals(normalizedRole) && normalizedUserId.isBlank()) {
+                return NO_ACCESS;
+            }
             boolean studentScope = "student".equals(normalizedRole) && !normalizedUserId.isBlank();
 
             Integer totalStudents = studentScope
@@ -641,6 +656,9 @@ public class ScoreService {
                 return Map.of("found", false, "message", "未找到该学生信息");
             }
             String studentId = student.studentId();
+            if (!canAccessStudentScope(studentId)) {
+                return NO_ACCESS;
+            }
             String studentName = student.name();
             Map<String, Object> radarSnapshot = buildStudentRadarSnapshot(studentId, studentName);
 
@@ -717,6 +735,9 @@ public class ScoreService {
                 return Map.of("found", false, "message", "未找到该学生信息");
             }
             String studentId = student.studentId();
+            if (!canAccessStudentScope(studentId)) {
+                return NO_ACCESS;
+            }
             String studentName = student.name();
 
             String sql = 
@@ -1025,6 +1046,32 @@ public class ScoreService {
 
     private boolean canAccessDataTools() {
         return !isGuestRole(OrchestrationContext.getUserRole());
+    }
+
+    private boolean canAccessStudentScope(String targetStudentId) {
+        if (targetStudentId == null || targetStudentId.isBlank()) return false;
+        String role = normalizeRole(OrchestrationContext.getUserRole());
+        if (isGuestRole(role)) return false;
+        if ("student".equals(role)) {
+            String requesterStudentId = normalizeSessionId(OrchestrationContext.getSessionId());
+            return requesterStudentId != null && requesterStudentId.equals(targetStudentId);
+        }
+        return "teacher".equals(role) || "admin".equals(role);
+    }
+
+    private boolean isStudentRole(String role) {
+        return "student".equals(normalizeRole(role));
+    }
+
+    private String normalizeRole(String role) {
+        if (role == null) return "";
+        return role.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeSessionId(String sessionId) {
+        if (sessionId == null) return null;
+        String normalized = sessionId.trim();
+        return normalized.isBlank() ? null : normalized;
     }
 
     private String normalizeMajorName(String text) {

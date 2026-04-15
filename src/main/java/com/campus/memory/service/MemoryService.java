@@ -10,6 +10,7 @@ import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.campus.memory.context.OrchestrationContext;
@@ -22,6 +23,7 @@ import java.util.*;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
 
@@ -47,6 +49,10 @@ public class MemoryService {
     private final ScoreService scoreService;
     private final PlanningLayer planningLayer;
     private final JdbcTemplate jdbcTemplate;
+    @Value("${memory.retrieval.topk.default:40}")
+    private int defaultRetrievalTopK;
+    @Value("${memory.retrieval.topk.multimedia:60}")
+    private int multimediaRetrievalTopK;
 
     // --- 荣誉墙元数据常量 ---
     public static final String METADATA_IS_HONOR = "isHonor";
@@ -55,6 +61,14 @@ public class MemoryService {
     public static final String METADATA_TIMESTAMP = "timestamp"; // 精确获得时间
     public static final String METADATA_HONOR_YEAR = "honorYear"; // 获得年份
     private static final String HONOR_DELETE_TABLE = "honor_deleted_records";
+    private static final String[] INVALID_RECALL_MARKERS = {
+        "ocr识别失败", "ocr 识别失败", "识别失败", "无法识别", "未识别到文本", "未提取到文本",
+        "无文本内容", "无有效信息", "内容为空", "仅文件元数据", "仅包含文件元数据"
+    };
+    private static final String[] TEMPLATE_PREFIXES = {
+        "文件名:", "分类:", "媒体类型:", "检索标签:", "识别语言:", "source:", "filename:", "category:"
+    };
+    private static final Pattern SELF_REFERENCE_PATTERN = Pattern.compile("(?<!们)我(?!们)");
 
     // 已迁移至 OrchestrationContext
 
@@ -83,6 +97,7 @@ public class MemoryService {
     public interface AssetClassifier {
         @SystemMessage({
             "你是一个校园资产分类与知识提取专家。你的任务是根据给定的文件名、描述和提取出的文本内容，将该资产归类到预定义的校园分类中，并提取关键实体信息。",
+            "当输入中出现“拍摄质量评分”时，必须区分“拍摄质量”与“OCR文本可读性”：若评分>=80，不得输出“图像质量差/拍摄质量差”，可描述为“拍摄质量较好但文本语义不可用”。",
             "### 预定义分类：",
             "- **校史 (History)**: 包含学校发展历程、老照片描述、校报、校史馆资料等。",
             "- **荣誉 (Honor)**: 包含各类获奖证书、奖杯照片描述、荣誉名单等。需要额外提取：获奖等级(校级/省级/国家级)、类别(学术/体育/艺术/社会实践)、获奖年份。",
@@ -119,10 +134,17 @@ public class MemoryService {
      * 调用 AI 对资产内容进行深度分类与知识提取
      */
     public Map<String, Object> classifyAsset(String fileName, String description, String extractedText) {
+        return classifyAsset(fileName, description, extractedText, null);
+    }
+
+    public Map<String, Object> classifyAsset(String fileName, String description, String extractedText, Integer cameraQualityScore) {
         StringBuilder content = new StringBuilder();
         content.append("文件名: ").append(fileName).append("\n");
         if (description != null && !description.isBlank()) {
             content.append("描述: ").append(description).append("\n");
+        }
+        if (cameraQualityScore != null) {
+            content.append("拍摄质量评分: ").append(cameraQualityScore).append("/100\n");
         }
         if (extractedText != null && !extractedText.isBlank()) {
             content.append("提取文本: ").append(extractedText);
@@ -143,6 +165,14 @@ public class MemoryService {
         }
     }
 
+    /**
+     * 语音/多模态问答接口
+     */
+    public String chat(String sessionId, String message) {
+        String effectiveSessionId = (sessionId == null || sessionId.isBlank()) ? "default-session" : sessionId;
+        return assistant.chat(effectiveSessionId, message);
+    }
+
     // 用于存储会话记忆，实际生产建议使用持久化存储（如 Redis）
     private final Map<String, ChatMemory> memoryCache = new ConcurrentHashMap<>();
     private final Set<String> deletedHonorObjectNames = ConcurrentHashMap.newKeySet();
@@ -155,6 +185,7 @@ public class MemoryService {
     }
 
     private static final Pattern YEAR_PATTERN = Pattern.compile("(1[89]\\d{2}|20\\d{2})[\\s\\S]{0,2}年");
+    private static final Pattern STUDENT_ID_PATTERN = Pattern.compile("\\b\\d{8,16}\\b");
     private enum MediaIntent {
         NONE, VIDEO, AUDIO, IMAGE, MULTIMEDIA
     }
@@ -274,19 +305,43 @@ public class MemoryService {
      */
     public List<Map<String, Object>> getHonorTreeData() {
         log.info("开始生成校园荣誉生长树数据...");
-        // 通过检索“校园荣誉”关键字获取一批荣誉节点 (Milvus 限制 1024 条或更多，这里取前 100 条荣誉记录)
-        Embedding queryEmbedding = embeddingModel.embed("校园荣誉 奖项 证书 比赛").content();
-        List<EmbeddingMatch<TextSegment>> matches = embeddingStore.findRelevant(queryEmbedding, 200);
+        List<TextSegment> honorSegments = collectHonorSegments(meta -> true);
+        return aggregateHonorTreeData(honorSegments);
+    }
 
-        // 过滤出真正带有 isHonor 标记的记录
-        List<TextSegment> honorSegments = matches.stream()
+    public List<Map<String, Object>> getPersonalHonorTreeData(String userId) {
+        String safeUserId = userId == null ? "" : userId.trim();
+        if (safeUserId.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<TextSegment> honorSegments = collectHonorSegments(meta -> {
+            String ownerId = meta.getString("userId");
+            String role = meta.getString("role");
+            if (ownerId == null || !safeUserId.equals(ownerId.trim())) {
+                return false;
+            }
+            if (role == null || role.isBlank()) {
+                return true;
+            }
+            return "private".equalsIgnoreCase(role.trim());
+        });
+        return aggregateHonorTreeData(honorSegments);
+    }
+
+    private List<TextSegment> collectHonorSegments(Predicate<Metadata> extraFilter) {
+        Embedding queryEmbedding = embeddingModel.embed("校园荣誉 奖项 证书 比赛").content();
+        List<EmbeddingMatch<TextSegment>> matches = embeddingStore.findRelevant(queryEmbedding, 260);
+        return matches.stream()
                 .map(EmbeddingMatch::embedded)
+                .filter(Objects::nonNull)
+                .filter(segment -> segment.metadata() != null)
                 .filter(segment -> segment.metadata().getString(METADATA_IS_HONOR) != null)
                 .filter(segment -> !isHonorDeleted(segment.metadata().getString("objectName")))
+                .filter(segment -> extraFilter == null || extraFilter.test(segment.metadata()))
                 .collect(Collectors.toList());
+    }
 
-        // 按年份聚合数据结构，并在同一分类内按文件去重
-        // { year: { category: { dedupKey: item } } }
+    private List<Map<String, Object>> aggregateHonorTreeData(List<TextSegment> honorSegments) {
         Map<String, Map<String, LinkedHashMap<String, Map<String, Object>>>> aggregated = new TreeMap<>(Collections.reverseOrder());
 
         for (TextSegment segment : honorSegments) {
@@ -347,7 +402,6 @@ public class MemoryService {
             yearNode.put("children", categoryNodes);
             treeData.add(yearNode);
         }
-
         return treeData;
     }
 
@@ -489,55 +543,74 @@ public class MemoryService {
     @Tool("检索校园荣誉墙相关信息，包括奖项详情、获得时间、级别和相关感言")
     public String searchHonorWall(String query) {
         log.info("Tool: 正在执行校园荣誉墙深度检索: {}", query);
+        OrchestrationContext.recordToolInvoke("HONOR");
         Embedding queryEmbedding = embeddingModel.embed(query).content();
-        
-        // 1. 扩大检索范围 (k=50)
+        String currentUserId = OrchestrationContext.getSessionId();
+        String currentRole = OrchestrationContext.getUserRole();
+        boolean selfScopedQuery = isSelfReferentialQuery(query) && currentUserId != null && !currentUserId.isBlank();
+        Set<String> queryStudentIds = new LinkedHashSet<>(extractStudentIds(query));
+        if (queryStudentIds.isEmpty() && selfScopedQuery) {
+            queryStudentIds.add(currentUserId.trim());
+        }
         List<EmbeddingMatch<TextSegment>> matches = embeddingStore.findRelevant(queryEmbedding, 50);
-        
-        // 2. 时间权重计算：越近的荣誉权重越高，或者根据 query 中提到的年份进行偏移
         int currentYear = java.time.Year.now().getValue();
         Set<String> queryYears = extractYears(query);
 
         List<Map<String, Object>> scoredResults = matches.stream()
+            .filter(match -> match != null && match.embedded() != null && match.embedded().metadata() != null)
             .map(match -> {
                 TextSegment segment = match.embedded();
                 Metadata meta = segment.metadata();
-                
-                double score = match.score();
-                
-                // 元数据加权
-                if ("true".equals(meta.getString(METADATA_IS_HONOR))) {
-                    score += 0.3; // 强相关的荣誉标记加权
+                if (!"true".equalsIgnoreCase(meta.getString(METADATA_IS_HONOR))) {
+                    return null;
                 }
-                
+                String objectName = meta.getString("objectName");
+                if (isHonorDeleted(objectName)) {
+                    return null;
+                }
+                String ownerId = meta.getString("userId");
+                if (!queryStudentIds.isEmpty()) {
+                    if (ownerId == null || !queryStudentIds.contains(ownerId.trim())) {
+                        return null;
+                    }
+                }
+                String displayText = sanitizeHonorNodeText(segment.text(), meta.getString("description"), meta.getString("fileName"));
+                if (displayText == null || displayText.isBlank()) {
+                    return null;
+                }
+                double score = match.score() + 0.3;
                 String yearStr = meta.getString(METADATA_HONOR_YEAR);
                 if (yearStr != null) {
                     try {
                         int honorYear = Integer.parseInt(yearStr);
                         if (!queryYears.isEmpty()) {
-                            // 如果 query 提到了年份，则匹配该年份的权重极高
                             if (queryYears.contains(yearStr)) {
                                 score += 0.4;
                             }
                         } else {
-                            // 默认时间衰减逻辑：越近越重要
                             double timeWeight = 1.0 - (double)(currentYear - honorYear) / 20.0;
                             score += Math.max(0, timeWeight * 0.15);
                         }
                     } catch (NumberFormatException ignored) {}
                 }
-                
                 Map<String, Object> result = new HashMap<>();
-                result.put("text", segment.text());
+                result.put("text", displayText);
                 result.put("score", score);
                 result.put("metadata", meta.asMap());
                 return result;
             })
+            .filter(Objects::nonNull)
             .sorted((a, b) -> Double.compare((double)b.get("score"), (double)a.get("score")))
-            .limit(10) // 最终返回前 10 个最相关的荣誉片段
+            .limit(10)
             .collect(Collectors.toList());
 
-        // 3. 构造返回文本 (格式化为 RAG 可用的事实)
+        if (scoredResults.isEmpty()) {
+            if (!queryStudentIds.isEmpty()) {
+                return "未检索到该学号可确认的荣誉记录。";
+            }
+            return "未检索到可确认的荣誉记录。";
+        }
+
         StringBuilder sb = new StringBuilder("检索到以下相关荣誉信息：\n");
         for (int i = 0; i < scoredResults.size(); i++) {
             Map<String, Object> res = scoredResults.get(i);
@@ -548,8 +621,59 @@ public class MemoryService {
               .append(meta.getOrDefault(METADATA_HONOR_CATEGORY, "")).append(": ")
               .append(res.get("text")).append("\n");
         }
+
+        List<RelevantFile> files = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
+        for (Map<String, Object> res : scoredResults) {
+            Map<String, Object> meta = (Map<String, Object>) res.get("metadata");
+            String text = String.valueOf(res.getOrDefault("text", ""));
+            if (text != null && !text.isBlank()) {
+                texts.add(text);
+            }
+            String objectName = meta == null ? null : Objects.toString(meta.get("objectName"), null);
+            String fileName = meta == null ? null : Objects.toString(meta.get("fileName"), null);
+            String ownerId = meta == null ? null : Objects.toString(meta.get("userId"), null);
+            String sourceType = meta == null ? null : Objects.toString(meta.get("sourceType"), null);
+            if (sourceType == null || sourceType.isBlank()) {
+                sourceType = (ownerId != null && !ownerId.isBlank()) ? "private" : "official";
+            }
+            boolean isPrivate = ownerId != null && currentUserId != null && ownerId.trim().equals(currentUserId.trim());
+            String url = "";
+            if (objectName != null && !objectName.isBlank()) {
+                String encodedObjectName = objectName;
+                String encodedUserId = "";
+                String encodedRole = "";
+                try { encodedObjectName = java.net.URLEncoder.encode(objectName, StandardCharsets.UTF_8).replace("+", "%20"); } catch (Exception ignored) {}
+                try {
+                    encodedUserId = currentUserId == null ? "" : java.net.URLEncoder.encode(currentUserId, StandardCharsets.UTF_8).replace("+", "%20");
+                    encodedRole = currentRole == null ? "" : java.net.URLEncoder.encode(currentRole, StandardCharsets.UTF_8).replace("+", "%20");
+                } catch (Exception ignored) {}
+                url = "/api/asset/view?objectName=" + encodedObjectName + "&userId=" + encodedUserId + "&role=" + encodedRole;
+            }
+            files.add(RelevantFile.builder()
+                    .fileName((fileName == null || fileName.isBlank()) ? objectName : fileName)
+                    .objectName(objectName)
+                    .url(url)
+                    .sourceType(sourceType)
+                    .isPrivate(isPrivate)
+                    .build());
+        }
+        OrchestrationContext.getToolFiles().addAll(files);
+        OrchestrationContext.getToolMemories().addAll(texts);
         
         return sb.toString();
+    }
+
+    private Set<String> extractStudentIds(String query) {
+        if (query == null || query.isBlank()) {
+            return Collections.emptySet();
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        Matcher matcher = STUDENT_ID_PATTERN.matcher(query);
+        while (matcher.find()) {
+            ids.add(matcher.group());
+        }
+        return ids;
     }
 
     public String buildHonorNarrative(String honorText, String level, String category) {
@@ -581,6 +705,7 @@ public class MemoryService {
         
         String userRole = OrchestrationContext.getUserRole();
         String currentUserId = OrchestrationContext.getSessionId();
+        boolean selfScopedQuery = isSelfReferentialQuery(query) && currentUserId != null && !currentUserId.isBlank();
         TraceInfo.TraceInfoBuilder traceBuilder = OrchestrationContext.getTraceBuilder();
 
         boolean documentQuery = isDocumentQuery(query);
@@ -622,9 +747,14 @@ public class MemoryService {
                     return false;
                 }
                 if ("private".equalsIgnoreCase(requiredRole)) {
+                    if ("admin".equalsIgnoreCase(userRole)) return false;
                     return ownerId != null && ownerId.equals(currentUserId);
                 }
                 if ("all".equalsIgnoreCase(requiredRole)) return true;
+                if ("private".equalsIgnoreCase(sourceType)) {
+                    if ("admin".equalsIgnoreCase(userRole)) return false;
+                    return ownerId != null && ownerId.equals(currentUserId);
+                }
                 if (sourceType != null && !"private".equalsIgnoreCase(sourceType)) return true;
                 if (sourceType == null && ownerId == null) return true; // 兜底：无类型且无所有者视为公共
 
@@ -694,6 +824,9 @@ public class MemoryService {
                 String mediaType = metadata == null ? null : metadata.getString("mediaType");
                 String category = metadata == null ? null : metadata.getString("category");
                 String description = metadata == null ? null : metadata.getString("description");
+                if (!hasEffectiveRecallInformation(segment.text(), description, sourceName, sourceType, mediaType)) {
+                    return false;
+                }
                 return passesRelevanceGate(
                     segment.text(),
                     sourceName,
@@ -745,6 +878,27 @@ public class MemoryService {
                     .limit(12)
                     .collect(Collectors.toList());
             }
+        }
+        if (selfScopedQuery) {
+            Predicate<ScoredMatch> minePredicate = item -> {
+                Metadata metadata = item.match().embedded().metadata();
+                String ownerId = metadata == null ? null : metadata.getString("userId");
+                return ownerId != null && ownerId.equals(currentUserId);
+            };
+            Predicate<ScoredMatch> publicPredicate = item -> {
+                Metadata metadata = item.match().embedded().metadata();
+                String sourceType = metadata == null ? null : metadata.getString("sourceType");
+                return sourceType == null || !"private".equalsIgnoreCase(sourceType);
+            };
+            LinkedHashSet<ScoredMatch> merged = new LinkedHashSet<>();
+            ranked.stream().filter(minePredicate).findFirst()
+                    .or(() -> scored.stream().filter(minePredicate).findFirst())
+                    .ifPresent(merged::add);
+            ranked.stream().filter(publicPredicate).findFirst()
+                    .or(() -> scored.stream().filter(publicPredicate).findFirst())
+                    .ifPresent(merged::add);
+            merged.addAll(ranked);
+            ranked = new ArrayList<>(merged);
         }
         ranked = ranked.stream().limit(10).collect(Collectors.toList());
 
@@ -875,6 +1029,7 @@ public class MemoryService {
         traceBuilder.routeConfidence(plan.confidence());
         String normalizedRole = normalizeRole(userRole);
         boolean guestRole = isGuestRole(normalizedRole);
+        boolean selfScopedQuery = !guestRole && sessionId != null && !sessionId.isBlank() && isSelfReferentialQuery(cleanQuery);
         boolean studentSensitiveQuery = isStudentSensitiveQuery(cleanQuery);
         if (guestRole && studentSensitiveQuery) {
             traceBuilder.intentType(plan.planType().name());
@@ -895,6 +1050,9 @@ public class MemoryService {
 
         try {
             String plannedMessage = buildPlannedUserMessage(cleanQuery, plan);
+            if (selfScopedQuery) {
+                plannedMessage = buildSelfScopedMessage(plannedMessage, sessionId);
+            }
             if (guestRole && isDataRelatedPlan(plan)) {
                 plannedMessage = buildGuestDocumentOnlyMessage(cleanQuery, plan);
             }
@@ -1029,9 +1187,9 @@ public class MemoryService {
 
     private int resolveRetrievalTopK(MediaIntent mediaIntent, boolean multimediaQuery) {
         if (mediaIntent != MediaIntent.NONE || multimediaQuery) {
-            return 120;
+            return Math.max(20, multimediaRetrievalTopK);
         }
-        return 40;
+        return Math.max(10, defaultRetrievalTopK);
     }
 
     private String buildRetrievalQueryForIntent(String query, MediaIntent mediaIntent, boolean multimediaQuery) {
@@ -1181,6 +1339,118 @@ public class MemoryService {
         return Math.min(boost, cap);
     }
 
+    private boolean hasEffectiveRecallInformation(
+        String text,
+        String description,
+        String sourceName,
+        String sourceType,
+        String mediaType
+    ) {
+        String merged = ((text == null ? "" : text) + " " + (description == null ? "" : description)).toLowerCase(Locale.ROOT);
+        if (containsInvalidRecallMarker(merged)) {
+            return false;
+        }
+
+        String content = normalizeRecallContent(extractLabeledValue(text, "内容:"));
+        String summary = normalizeRecallContent(extractLabeledValue(text, "AI 摘要:"));
+        String desc = normalizeRecallContent(description);
+        String source = normalizeRecallContent(sourceName);
+        boolean mediaLike = isMediaLikeAsset(sourceName, sourceType, mediaType);
+
+        if (isMeaningfulRecallText(content)) return true;
+        if (isMeaningfulRecallText(summary)) return true;
+        if (!mediaLike && isMeaningfulRecallText(desc)) return true;
+
+        if (!mediaLike && isMeaningfulRecallText(source) && source.length() >= 6) {
+            return true;
+        }
+        return false;
+    }
+
+    private String extractLabeledValue(String text, String label) {
+        if (text == null || text.isBlank() || label == null || label.isBlank()) {
+            return "";
+        }
+        int index = text.indexOf(label);
+        if (index < 0) {
+            return "";
+        }
+        int start = index + label.length();
+        String tail = text.substring(start).trim();
+        int nextLine = tail.indexOf('\n');
+        if (nextLine >= 0) {
+            return tail.substring(0, nextLine).trim();
+        }
+        return tail;
+    }
+
+    private String normalizeRecallContent(String value) {
+        if (value == null || value.isBlank()) return "";
+        StringBuilder sb = new StringBuilder();
+        String[] lines = value.split("\\R");
+        for (String raw : lines) {
+            if (raw == null) continue;
+            String line = raw.trim();
+            if (line.isBlank()) continue;
+            String lower = line.toLowerCase(Locale.ROOT);
+            boolean isTemplateLine = false;
+            for (String prefix : TEMPLATE_PREFIXES) {
+                if (lower.startsWith(prefix.toLowerCase(Locale.ROOT))) {
+                    isTemplateLine = true;
+                    break;
+                }
+            }
+            if (isTemplateLine) continue;
+            sb.append(line).append(" ");
+        }
+        return sb.toString().trim();
+    }
+
+    private boolean containsInvalidRecallMarker(String value) {
+        if (value == null || value.isBlank()) return false;
+        for (String marker : INVALID_RECALL_MARKERS) {
+            if (marker != null && !marker.isBlank() && value.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isMeaningfulRecallText(String value) {
+        if (value == null || value.isBlank()) return false;
+        if (containsInvalidRecallMarker(value.toLowerCase(Locale.ROOT))) return false;
+
+        int infoChars = 0;
+        for (char c : value.toCharArray()) {
+            if (Character.isLetterOrDigit(c) || Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
+                infoChars++;
+            }
+        }
+        if (infoChars < 8) return false;
+
+        String[] pieces = value.split("[\\s,，。！？；：、/|（）()\\[\\]【】<>《》]+");
+        int tokenCount = 0;
+        for (String piece : pieces) {
+            if (piece == null) continue;
+            String token = piece.trim();
+            if (token.length() < 2) continue;
+            if (token.chars().anyMatch(ch -> Character.isLetterOrDigit(ch) || Character.UnicodeScript.of(ch) == Character.UnicodeScript.HAN)) {
+                tokenCount++;
+            }
+        }
+        return tokenCount >= 2 || infoChars >= 12;
+    }
+
+    private boolean isMediaLikeAsset(String sourceName, String sourceType, String mediaType) {
+        String name = sourceName == null ? "" : sourceName.toLowerCase(Locale.ROOT);
+        String source = sourceType == null ? "" : sourceType.toLowerCase(Locale.ROOT);
+        String media = mediaType == null ? "" : mediaType.toLowerCase(Locale.ROOT);
+        if ("multimedia".equals(source)) return true;
+        if (!media.isBlank()) return true;
+        if (name.contains("camera-scan") || name.contains("扫描") || name.contains("拍照")) return true;
+        return endsWithAny(name, ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif");
+    }
+
     private boolean passesRelevanceGate(
         String text,
         String sourceName,
@@ -1214,7 +1484,9 @@ public class MemoryService {
         if (mediaIntent != MediaIntent.NONE) {
             boolean mediaMatched = matchesMediaIntent(sourceName, text, sourceType, mediaType, mediaIntent);
             if (!mediaMatched) return false;
-            if (mediaMatched && (tokenHits >= 1 || semanticScore >= 0.16 || fullQueryHit || "multimedia".equalsIgnoreCase(sourceType))) return true;
+            if (fullQueryHit || tokenHits >= 1) return true;
+            if (mediaIntent != MediaIntent.IMAGE && "multimedia".equalsIgnoreCase(sourceType) && semanticScore >= 0.28) return true;
+            return false;
         }
         if (multimediaQuery && "multimedia".equalsIgnoreCase(sourceType)) {
             if (tokenHits >= 1) return true;
@@ -1420,6 +1692,28 @@ public class MemoryService {
         String base = buildPlannedUserMessage(originalQuery, plan);
         return "【游客权限约束】当前用户为游客，只能查询公开文档与公开政策，禁止调用任何学生成绩、学生档案、学生名单等数据工具。"
                 + "若问题涉及个人学生信息，直接回答“无访问权限”。\n" + base;
+    }
+
+    private String buildSelfScopedMessage(String baseMessage, String currentUserId) {
+        String safeBase = baseMessage == null ? "" : baseMessage;
+        if (currentUserId == null || currentUserId.isBlank()) {
+            return safeBase;
+        }
+        return "【登录用户上下文】当前用户标识=" + currentUserId
+                + "。当问题中出现“我/我的/本人”等指代时，默认指向该用户。检索范围需覆盖公共资料与该用户私有空间资料，并在回答中优先给出与该用户直接相关的信息。\n"
+                + safeBase;
+    }
+
+    private boolean isSelfReferentialQuery(String query) {
+        if (query == null || query.isBlank()) return false;
+        String q = query.toLowerCase(Locale.ROOT);
+        return q.contains("我的")
+                || q.contains("本人")
+                || q.contains("我自己")
+                || q.contains("本人的")
+                || q.contains("我的资料")
+                || q.contains("我的信息")
+                || SELF_REFERENCE_PATTERN.matcher(q).find();
     }
 
     private boolean isUuidPrefixed(String value) {

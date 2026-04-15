@@ -3,7 +3,7 @@ import axios from 'axios'
 import { Routes, Route, Link, Navigate, useNavigate } from 'react-router-dom'
 import { 
   Database, Loader2, Sparkles, ChevronRight, FileText, ExternalLink, Lock,
-  Video, Music, Link as LinkIcon, Info, Download, Image as ImageIcon, GraduationCap
+  Video, Music, Link as LinkIcon, Info, Download, Image as ImageIcon, GraduationCap, Mic, Camera
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -12,6 +12,7 @@ import { CampusHonorTree } from './components/CampusHonorTree'
 import { ChartCard, type ChartConfig } from './components/ChartCard'
 import { Navbar } from './components/Navbar'
 import { cn } from './utils/cn'
+import { captureEnhancedCameraFrame, DOCUMENT_GUIDE_RECT, evaluateCameraFrameQuality } from './utils/cameraScan'
 
 /**
  * AI 执行链路展示组件 (State Management UI)
@@ -128,17 +129,30 @@ type AppSearchResponse = {
   };
 };
 
+type VoiceInputResponse = {
+  status: string
+  recognizedText?: string
+  recognizedLanguage?: string
+  answer?: string
+  provider?: string
+  message?: string
+}
+
 /**
  * 侧边栏预览组件 (PDF, Video, Audio, Link)
  */
 function PreviewSidebar({ 
   file, 
   onClose,
-  getDisplayFileName
+  getDisplayFileName,
+  requestUserId,
+  requestRole
 }: { 
   file: NonNullable<AppSearchResponse['relevantFiles']>[number], 
   onClose: () => void,
-  getDisplayFileName: (f?: string, o?: string) => string
+  getDisplayFileName: (f?: string, o?: string) => string,
+  requestUserId?: string,
+  requestRole?: string
 }) {
   const [textCache, setTextCache] = useState<Record<string, string>>({});
   const [slideCountCache, setSlideCountCache] = useState<Record<string, number>>({});
@@ -174,9 +188,31 @@ function PreviewSidebar({
     if (!name) return false;
     return /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(name);
   };
+  const detectName = file.fileName || file.objectName || '';
   const isLink = file.sourceType === 'link';
   const fileName = getDisplayFileName(file.fileName, file.objectName);
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const appendAccessContext = (url: string) => {
+    if (!url) return '';
+    const hasUserId = /[?&]userId=/.test(url);
+    const hasRole = /[?&]role=/.test(url);
+    const parts: string[] = [];
+    if (!hasUserId && requestUserId) {
+      parts.push(`userId=${encodeURIComponent(requestUserId)}`);
+    }
+    if (!hasRole && requestRole) {
+      parts.push(`role=${encodeURIComponent(requestRole)}`);
+    }
+    if (!parts.length) return url;
+    const joiner = url.includes('?') ? '&' : '?';
+    return `${url}${joiner}${parts.join('&')}`;
+  };
+  const baseAssetUrl = file.objectName
+    ? `/api/asset/view?objectName=${encodeURIComponent(file.objectName)}`
+    : '';
+  const viewUrl = isLink
+    ? (file.url || '')
+    : appendAccessContext((file.url && file.url.trim()) ? file.url : baseAssetUrl);
   
   const getAbsoluteUrl = (url?: string) => {
     if (!url) return '';
@@ -210,14 +246,14 @@ function PreviewSidebar({
     return `${base}${joiner}width=640`;
   };
 
-  const textPreviewUrl = isText(file.fileName)
-    ? file.url
-    : (isOffice(file.fileName) && isLocal && !isPowerPoint(file.fileName) ? getOfficeTextPreviewUrl(file.url) : '');
-  const slidesPreviewUrl = (isOffice(file.fileName) && isLocal && isPowerPoint(file.fileName))
-    ? getOfficeSlidesPreviewUrl(file.url)
+  const textPreviewUrl = isText(detectName)
+    ? viewUrl
+    : (isOffice(detectName) && isLocal && !isPowerPoint(detectName) ? getOfficeTextPreviewUrl(viewUrl) : '');
+  const slidesPreviewUrl = (isOffice(detectName) && isLocal && isPowerPoint(detectName))
+    ? getOfficeSlidesPreviewUrl(viewUrl)
     : '';
-  const slideImageBaseUrl = (isOffice(file.fileName) && isLocal && isPowerPoint(file.fileName))
-    ? getOfficeSlideImageBaseUrl(file.url)
+  const slideImageBaseUrl = (isOffice(detectName) && isLocal && isPowerPoint(detectName))
+    ? getOfficeSlideImageBaseUrl(viewUrl)
     : '';
   const textContent = textPreviewUrl ? (textCache[textPreviewUrl] ?? null) : null;
   const slideCount = slidesPreviewUrl ? (slideCountCache[slidesPreviewUrl] ?? null) : null;
@@ -237,10 +273,10 @@ function PreviewSidebar({
       })
       .catch(err => {
         console.error('Failed to fetch text content:', err);
-        const fallback = isText(file.fileName) ? '无法加载文本内容' : '无法加载文档预览文本';
+        const fallback = isText(detectName) ? '无法加载文本内容' : '无法加载文档预览文本';
         setTextCache(prev => ({ ...prev, [textPreviewUrl]: fallback }));
       });
-  }, [textPreviewUrl, textCache, file.fileName]);
+  }, [textPreviewUrl, textCache, detectName]);
 
   useEffect(() => {
     if (!slidesPreviewUrl) return;
@@ -280,7 +316,7 @@ function PreviewSidebar({
   }, [slidesPreviewUrl]);
 
   useEffect(() => {
-    if (!slidesPreviewUrl || !isPowerPoint(file.fileName)) return;
+    if (!slidesPreviewUrl || !isPowerPoint(detectName)) return;
     if (!slideCount || slideVisibleCount >= slideCount) return;
     const node = loadMoreRef.current;
     if (!node) return;
@@ -296,7 +332,7 @@ function PreviewSidebar({
     }, { root: null, threshold: 0.1 });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [slidesPreviewUrl, slideCount, slideVisibleCount, file.fileName, slideInitialCountCache]);
+  }, [slidesPreviewUrl, slideCount, slideVisibleCount, detectName, slideInitialCountCache]);
 
   return (
     <div className="fixed inset-y-0 right-0 w-full md:w-[860px] lg:w-[1040px] xl:w-[1200px] 2xl:w-[1360px] bg-white shadow-2xl z-[100] border-l border-slate-200 flex flex-col animate-in slide-in-from-right duration-300">
@@ -305,11 +341,11 @@ function PreviewSidebar({
         <div className="flex items-center gap-3 overflow-hidden">
           <div className="p-2 bg-blue-100 text-blue-600 rounded-lg shrink-0">
             {isLink ? <LinkIcon size={18} /> : 
-             isPDF(file.fileName) ? <FileText size={18} /> : 
-             isOffice(file.fileName) ? <FileText size={18} className="text-blue-700" /> :
-             isImage(file.fileName) ? <ImageIcon size={18} /> :
-             isVideo(file.fileName) ? <Video size={18} /> : 
-             isAudio(file.fileName) ? <Music size={18} /> : 
+             isPDF(detectName) ? <FileText size={18} /> : 
+             isOffice(detectName) ? <FileText size={18} className="text-blue-700" /> :
+             isImage(detectName) ? <ImageIcon size={18} /> :
+             isVideo(detectName) ? <Video size={18} /> : 
+             isAudio(detectName) ? <Music size={18} /> : 
              <FileText size={18} />}
           </div>
           <h3 className="font-black text-slate-800 truncate" title={fileName}>
@@ -326,22 +362,22 @@ function PreviewSidebar({
 
       {/* 内容区 */}
       <div className="flex-1 bg-slate-100 overflow-hidden relative">
-        {isPDF(file.fileName) ? (
+        {isPDF(detectName) ? (
           <iframe 
-            src={`${file.url}#toolbar=0&navpanes=0&zoom=page-width`} 
+            src={`${viewUrl}#toolbar=0&navpanes=0&zoom=page-width`} 
             className="w-full h-full border-none bg-white"
             title="PDF Preview"
           />
-        ) : isOffice(file.fileName) ? (
+        ) : isOffice(detectName) ? (
           isLocal ? (
             <div className="w-full h-full bg-white p-8 overflow-auto">
               <div className="p-4 bg-amber-50 text-amber-700 rounded-2xl mb-5 border border-amber-100 flex items-center gap-3">
                 <Info size={20} />
                 <p className="text-sm font-bold">
-                  {isPowerPoint(file.fileName) ? '当前为本地模式，已切换为幻灯片预览' : '当前为本地模式，已切换为文本预览'}
+                  {isPowerPoint(detectName) ? '当前为本地模式，已切换为幻灯片预览' : '当前为本地模式，已切换为文本预览'}
                 </p>
               </div>
-              {isPowerPoint(file.fileName) ? (
+              {isPowerPoint(detectName) ? (
                 loadingSlides ? (
                   <div className="flex items-center justify-center h-[60vh]">
                     <Loader2 className="animate-spin text-blue-600" size={32} />
@@ -381,7 +417,7 @@ function PreviewSidebar({
               )}
               <div className="mt-6">
                 <a
-                  href={file.url}
+                  href={viewUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all"
@@ -392,12 +428,12 @@ function PreviewSidebar({
             </div>
           ) : (
             <iframe 
-              src={`https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(getAbsoluteUrl(file.url))}`} 
+              src={`https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(getAbsoluteUrl(viewUrl))}`} 
               className="w-full h-full border-none bg-white"
               title="Office Preview"
             />
           )
-        ) : isText(file.fileName) ? (
+        ) : isText(detectName) ? (
           <div className="w-full h-full bg-white p-8 overflow-auto">
             {loadingText ? (
               <div className="flex items-center justify-center h-full">
@@ -409,34 +445,34 @@ function PreviewSidebar({
               </pre>
             )}
           </div>
-        ) : isImage(file.fileName) ? (
+        ) : isImage(detectName) ? (
           <div className="w-full h-full flex items-center justify-center bg-slate-50 p-2">
             <img
-              src={file.url}
+              src={viewUrl}
               alt={fileName}
               className="w-full h-full object-contain"
             />
           </div>
-        ) : isVideo(file.fileName) ? (
+        ) : isVideo(detectName) ? (
           <div className="w-full h-full flex items-center justify-center bg-black">
             <video 
-              src={file.url} 
+              src={viewUrl} 
               controls 
               autoPlay
               className="max-w-full max-h-full"
             />
           </div>
-        ) : isAudio(file.fileName) ? (
+        ) : isAudio(detectName) ? (
           <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 p-10">
             <div className="w-32 h-32 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-8 animate-pulse">
               <Music size={48} />
             </div>
-            <audio src={file.url} controls className="w-full" />
+            <audio src={viewUrl} controls className="w-full" />
             <p className="mt-4 text-slate-400 font-bold uppercase tracking-widest text-xs">正在播放音频资产</p>
           </div>
         ) : isLink ? (
           <iframe 
-            src={file.url} 
+            src={viewUrl} 
             className="w-full h-full border-none bg-white"
             title="External Link Preview"
             sandbox="allow-scripts allow-same-origin allow-popups"
@@ -446,7 +482,7 @@ function PreviewSidebar({
             <Info size={48} className="mb-4 opacity-20" />
             <p className="font-bold">该文件类型暂不支持直接预览</p>
             <a 
-              href={file.url} 
+              href={viewUrl} 
               target="_blank" 
               rel="noopener noreferrer"
               className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all"
@@ -496,8 +532,10 @@ function Layout({
   onSync,
   onUpload,
   onAddLink,
+  onCameraScan,
   isSyncing,
   isUploading,
+  isCameraScanning,
   children
 }: {
   user: AuthUser | null;
@@ -506,8 +544,10 @@ function Layout({
   onSync: () => void;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onAddLink: () => void;
+  onCameraScan: () => void;
   isSyncing: boolean;
   isUploading: boolean;
+  isCameraScanning: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -519,8 +559,10 @@ function Layout({
         onSync={onSync}
         onUpload={onUpload}
         onAddLink={onAddLink}
+        onCameraScan={onCameraScan}
         isSyncing={isSyncing}
         isUploading={isUploading}
+        isCameraScanning={isCameraScanning}
       />
       <main className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
         <div className="bg-white rounded-[2rem] border border-slate-200/70 shadow-lg shadow-slate-200/20 overflow-hidden min-h-[calc(100vh-7.5rem)]">
@@ -1498,6 +1540,16 @@ function App() {
   }[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
+  const [isVoiceRecognizing, setIsVoiceRecognizing] = useState(false)
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false)
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false)
+  const [isCameraStarting, setIsCameraStarting] = useState(false)
+  const [isCameraUploading, setIsCameraUploading] = useState(false)
+  const [capturedCameraBlob, setCapturedCameraBlob] = useState<Blob | null>(null)
+  const [capturedCameraPreviewUrl, setCapturedCameraPreviewUrl] = useState<string | null>(null)
+  const [capturedCameraQualityText, setCapturedCameraQualityText] = useState<string | null>(null)
+  const [capturedCameraQualityScore, setCapturedCameraQualityScore] = useState<number | null>(null)
+  const [voiceLanguage, setVoiceLanguage] = useState('auto')
   const [syncing, setSyncing] = useState(false);
   const [highlightedFileIdx] = useState<{messageIdx: number, fileIdx: number} | null>(null)
   const [previewFile, setPreviewFile] = useState<NonNullable<AppSearchResponse['relevantFiles']>[number] | null>(null);
@@ -1688,6 +1740,13 @@ function App() {
 
   const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
+  const voiceChunksRef = useRef<Blob[]>([])
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
+  const cameraCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const cameraStreamRef = useRef<MediaStream | null>(null)
+  const cameraUploadAbortRef = useRef<AbortController | null>(null)
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -1697,6 +1756,37 @@ function App() {
   useEffect(() => {
     scrollToBottom()
   }, [chatHistory, isSearching])
+
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop()
+      }
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach(track => track.stop())
+      }
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop())
+        cameraStreamRef.current = null
+      }
+      if (cameraUploadAbortRef.current) {
+        cameraUploadAbortRef.current.abort()
+        cameraUploadAbortRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!uploadStatus) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      setUploadStatus(null)
+    }, 5000)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [uploadStatus])
 
   const handleSearch = async (e?: React.FormEvent, customQuery?: string) => {
     if (e) e.preventDefault()
@@ -1785,6 +1875,336 @@ function App() {
     }
   }
 
+  const submitVoiceBlob = async (voiceBlob: Blob) => {
+    setIsVoiceRecognizing(true)
+    setUploadStatus(null)
+
+    try {
+      const file = new File([voiceBlob], `recording-${Date.now()}.webm`, {
+        type: voiceBlob.type || 'audio/webm'
+      })
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await axios.post<VoiceInputResponse>('/api/asset/multimodal/voice/transcribe', formData, {
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'multipart/form-data'
+        },
+        params: {
+          language: voiceLanguage === 'auto' ? undefined : voiceLanguage
+        }
+      })
+
+      const recognizedText = response.data?.recognizedText?.trim() || ''
+      const recognizedLanguage = response.data?.recognizedLanguage || 'unknown'
+
+      if (recognizedText) {
+        setQuery(recognizedText)
+      }
+
+      setUploadStatus({
+        type: 'success',
+        message: recognizedText
+          ? `Whisper 识别成功（语言: ${recognizedLanguage}），已填入输入框。`
+          : `Whisper 识别成功（语言: ${recognizedLanguage}），但未识别到有效文本。`
+      })
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { data?: { message?: string } }; message?: string }
+      const errorMessage = axiosError.response?.data?.message || axiosError.message || '未知错误'
+      setUploadStatus({ type: 'error', message: `Whisper 识别失败：${errorMessage}` })
+    } finally {
+      setIsVoiceRecognizing(false)
+    }
+  }
+
+  const startVoiceRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setUploadStatus({ type: 'error', message: '当前浏览器不支持录音功能。' })
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioStreamRef.current = stream
+      voiceChunksRef.current = []
+
+      const preferredMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : undefined
+      const recorder = preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream)
+      mediaRecorderRef.current = recorder
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          voiceChunksRef.current.push(event.data)
+        }
+      }
+      recorder.onstop = async () => {
+        const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        voiceChunksRef.current = []
+        if (audioStreamRef.current) {
+          audioStreamRef.current.getTracks().forEach(track => track.stop())
+          audioStreamRef.current = null
+        }
+        mediaRecorderRef.current = null
+        if (blob.size > 0) {
+          await submitVoiceBlob(blob)
+        } else {
+          setUploadStatus({ type: 'error', message: '录音内容为空，请重试。' })
+        }
+      }
+      recorder.start()
+      setIsVoiceRecording(true)
+      setUploadStatus({ type: 'success', message: '录音中，再次点击语音按钮结束录音并转写。' })
+    } catch (error) {
+      setIsVoiceRecording(false)
+      const message = error instanceof Error ? error.message : '无法启用麦克风'
+      setUploadStatus({ type: 'error', message: `录音启动失败：${message}` })
+    }
+  }
+
+  const stopVoiceRecording = () => {
+    const recorder = mediaRecorderRef.current
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop()
+    }
+    setIsVoiceRecording(false)
+    setUploadStatus({ type: 'success', message: '录音结束，正在识别并填入输入框...' })
+  }
+
+  const handleVoiceToggle = async () => {
+    if (isVoiceRecognizing) return
+    if (isVoiceRecording) {
+      stopVoiceRecording()
+      return
+    }
+    await startVoiceRecording()
+  }
+
+  const stopCameraStream = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop())
+      cameraStreamRef.current = null
+    }
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null
+    }
+  }
+
+  const isUploadCanceledError = (error: unknown) => {
+    const axiosError = error as { code?: string; name?: string }
+    return axios.isCancel(error) || axiosError?.code === 'ERR_CANCELED' || axiosError?.name === 'CanceledError'
+  }
+
+  const cancelCameraUpload = () => {
+    if (cameraUploadAbortRef.current) {
+      cameraUploadAbortRef.current.abort()
+      cameraUploadAbortRef.current = null
+    }
+  }
+
+  const handleCameraModalCancel = () => {
+    const wasUploading = isCameraUploading
+    cancelCameraUpload()
+    clearCapturedCameraPreview()
+    setIsCameraModalOpen(false)
+    if (wasUploading) {
+      setUploadStatus({ type: 'error', message: '已取消当前图片上传。' })
+    }
+  }
+
+  const clearCapturedCameraPreview = () => {
+    setCapturedCameraBlob(null)
+    setCapturedCameraQualityText(null)
+    setCapturedCameraQualityScore(null)
+    setCapturedCameraPreviewUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev)
+      }
+      return null
+    })
+  }
+
+  useEffect(() => {
+    if (!isCameraModalOpen) {
+      clearCapturedCameraPreview()
+      stopCameraStream()
+      return
+    }
+
+    let cancelled = false
+
+    const startCameraPreview = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setUploadStatus({ type: 'error', message: '当前浏览器不支持摄像头功能。' })
+        setIsCameraModalOpen(false)
+        return
+      }
+
+      setIsCameraStarting(true)
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 2560 },
+            height: { ideal: 1440 }
+          },
+          audio: false
+        })
+        if (cancelled) {
+          stream.getTracks().forEach(track => track.stop())
+          return
+        }
+        cameraStreamRef.current = stream
+        if (cameraVideoRef.current) {
+          cameraVideoRef.current.srcObject = stream
+          await cameraVideoRef.current.play().catch(() => undefined)
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法访问摄像头'
+        setUploadStatus({ type: 'error', message: `摄像头启动失败：${message}` })
+        setIsCameraModalOpen(false)
+      } finally {
+        if (!cancelled) {
+          setIsCameraStarting(false)
+        }
+      }
+    }
+
+    startCameraPreview()
+
+    return () => {
+      cancelled = true
+      stopCameraStream()
+    }
+  }, [isCameraModalOpen])
+
+  useEffect(() => {
+    if (!isCameraModalOpen || capturedCameraPreviewUrl) {
+      return
+    }
+    const stream = cameraStreamRef.current
+    const video = cameraVideoRef.current
+    if (!stream || !video) {
+      return
+    }
+    if (video.srcObject !== stream) {
+      video.srcObject = stream
+    }
+    video.play().catch(() => undefined)
+  }, [capturedCameraPreviewUrl, isCameraModalOpen])
+
+  const handleCameraCapturePreview = async () => {
+    if (user?.role !== 'admin') {
+      setUploadStatus({ type: 'error', message: '仅管理员可使用摄像头扫描入库功能。' })
+      return
+    }
+
+    const video = cameraVideoRef.current
+    const canvas = cameraCanvasRef.current
+    if (!video || !canvas) {
+      setUploadStatus({ type: 'error', message: '摄像头未就绪，请稍后重试。' })
+      return
+    }
+    try {
+      const quality = evaluateCameraFrameQuality(video, DOCUMENT_GUIDE_RECT)
+      const issueText = quality.issues.join('；')
+      const qualityText = `质量评分 ${quality.score}/100`
+      if (!quality.passed) {
+        setCapturedCameraBlob(null)
+        setCapturedCameraPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return null
+        })
+        setCapturedCameraQualityText(null)
+        setCapturedCameraQualityScore(null)
+        setUploadStatus({
+          type: 'error',
+          message: `${qualityText}，请重拍。${issueText ? `问题：${issueText}` : ''}`
+        })
+        return
+      }
+      setCapturedCameraQualityText(`${qualityText}（可上传）`)
+      setCapturedCameraQualityScore(quality.score)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '质量检测失败'
+      setUploadStatus({ type: 'error', message: `拍照质量检测失败：${message}` })
+      return
+    }
+
+    let blob: Blob
+    try {
+      blob = await captureEnhancedCameraFrame(video, canvas, {
+        guideRect: DOCUMENT_GUIDE_RECT
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '图像处理失败'
+      setUploadStatus({ type: 'error', message: `拍照失败：${message}` })
+      return
+    }
+    const nextPreviewUrl = URL.createObjectURL(blob)
+    setCapturedCameraBlob(blob)
+    setCapturedCameraPreviewUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev)
+      }
+      return nextPreviewUrl
+    })
+  }
+
+  const handleCameraCaptureUpload = async () => {
+    if (user?.role !== 'admin') {
+      setUploadStatus({ type: 'error', message: '仅管理员可使用摄像头扫描入库功能。' })
+      return
+    }
+    if (!capturedCameraBlob) {
+      setUploadStatus({ type: 'error', message: '请先拍照预览，再确认上传。' })
+      return
+    }
+
+    setIsCameraUploading(true)
+    setIsUploading(true)
+    setUploadStatus(null)
+
+    try {
+      const controller = new AbortController()
+      cameraUploadAbortRef.current = controller
+      const file = new File([capturedCameraBlob], `camera-scan-${Date.now()}.png`, { type: capturedCameraBlob.type || 'image/png' })
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await axios.post<{ message?: string }>('/api/asset/physical/scan-callback', formData, {
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'multipart/form-data'
+        },
+        params: {
+          deviceId: 'WEB-CAM-01',
+          qualityScore: capturedCameraQualityScore ?? undefined
+        },
+        signal: controller.signal
+      })
+
+      const message = response.data?.message || '摄像头扫描件已成功入库并进入语义检索。'
+      setUploadStatus({ type: 'success', message })
+      clearCapturedCameraPreview()
+      setIsCameraModalOpen(false)
+    } catch (error: unknown) {
+      if (isUploadCanceledError(error)) {
+        setUploadStatus({ type: 'error', message: '已取消当前图片上传。' })
+        return
+      }
+      const axiosError = error as { response?: { data?: { message?: string } }; message?: string }
+      const errorMessage = axiosError.response?.data?.message || axiosError.message || '未知错误'
+      setUploadStatus({ type: 'error', message: `摄像头扫描上传失败：${errorMessage}` })
+    } finally {
+      cameraUploadAbortRef.current = null
+      setIsCameraUploading(false)
+      setIsUploading(false)
+    }
+  }
+
   const getDisplayFileName = (fileName?: string, objectName?: string) => {
     const source = objectName || fileName || ''
     if (source.length > 37 && source[36] === '-') {
@@ -1799,12 +2219,7 @@ function App() {
   }
 
   const shouldShowRelevantFiles = (response?: SearchResponse) => {
-    if (!response?.relevantFiles || response.relevantFiles.length === 0) return false
-    const answer = response.answer || ''
-    const noResultByAnswer = /(未检索到|未找到|没有找到|暂无相关|未直接提供)/.test(answer)
-    const filteredCount = response.trace?.filteredMatchCount
-    const noResultByTrace = typeof filteredCount === 'number' && filteredCount <= 0
-    return !noResultByAnswer && !noResultByTrace
+    return !!response?.relevantFiles && response.relevantFiles.length > 0
   }
 
   const chatView = (
@@ -2113,6 +2528,28 @@ function App() {
                 className="search-input"
               />
             </div>
+            <select
+              value={voiceLanguage}
+              onChange={(e) => setVoiceLanguage(e.target.value)}
+              className="h-[64px] px-4 rounded-2xl border border-slate-200 text-base font-bold text-slate-700 bg-white"
+            >
+              <option value="auto">自动识别</option>
+              <option value="zh">中文</option>
+              <option value="en">英文</option>
+              <option value="ja">日文</option>
+            </select>
+            <button
+              type="button"
+              onClick={handleVoiceToggle}
+              disabled={isVoiceRecognizing}
+              className={cn(
+                "h-[64px] px-5 rounded-2xl text-base font-black transition-all flex items-center gap-2 disabled:opacity-60",
+                isVoiceRecording ? "bg-rose-50 text-rose-700 hover:bg-rose-100" : "bg-amber-50 text-amber-700 hover:bg-amber-100"
+              )}
+            >
+              {isVoiceRecognizing ? <Loader2 size={22} className="animate-spin" /> : <Mic size={22} />}
+              {isVoiceRecording ? '结束录音' : '语音'}
+            </button>
             <button 
               type="submit"
               disabled={isSearching || !query.trim()}
@@ -2126,7 +2563,6 @@ function App() {
               )}
             </button>
           </form>
-          
           {uploadStatus && (
             <div className={cn(
               "mt-4 p-4 rounded-xl text-lg font-bold text-center border shadow-sm",
@@ -2152,8 +2588,16 @@ function App() {
       onSync={handleSync}
       onUpload={handleFileUpload}
       onAddLink={handleAddLink}
+      onCameraScan={() => {
+        if (user?.role !== 'admin') {
+          setUploadStatus({ type: 'error', message: '仅管理员可使用摄像头扫描入库功能。' })
+          return
+        }
+        setIsCameraModalOpen(true)
+      }}
       isSyncing={syncing}
       isUploading={isUploading}
+      isCameraScanning={isCameraUploading || isCameraStarting}
     >
       <Routes>
         <Route path="/" element={chatView} />
@@ -2161,7 +2605,9 @@ function App() {
           path="/private"
           element={
             user
-              ? <PrivateSpace user={user} onBack={() => navigate('/')} />
+              ? (user.role !== 'admin'
+                ? <PrivateSpace user={user} onBack={() => navigate('/')} />
+                : <PlaceholderPage title="管理员无私人空间" description="管理员账号仅用于系统治理，请使用教师或学生账号访问私人空间。" />)
               : <PlaceholderPage title="请先登录" description="未登录状态仅支持公共库检索，登录后可访问私有资料库。" />
           }
         />
@@ -2266,6 +2712,8 @@ function App() {
           file={previewFile} 
           onClose={() => setPreviewFile(null)}
           getDisplayFileName={getDisplayFileName}
+          requestUserId={user?.userId}
+          requestRole={currentRole}
         />
       )}
       <AuthModal
@@ -2273,6 +2721,109 @@ function App() {
         onClose={() => setShowAuthModal(false)}
         onSuccess={handleLoginSuccess}
       />
+      {isCameraModalOpen && (
+        <div className="fixed inset-0 z-[120] bg-slate-900/55 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-4xl rounded-3xl bg-white shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-xl font-black text-slate-900">摄像头扫描入库</h3>
+              <button
+                type="button"
+                onClick={handleCameraModalCancel}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold transition-colors"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-900 min-h-[360px] flex items-center justify-center relative">
+                {capturedCameraPreviewUrl ? (
+                  <img src={capturedCameraPreviewUrl} alt="扫描预览" className="w-full h-full object-contain bg-slate-950" />
+                ) : (
+                  <video
+                    ref={cameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-contain bg-slate-950"
+                  />
+                )}
+                {!capturedCameraPreviewUrl && (
+                  <div className="pointer-events-none absolute inset-0">
+                    <div className="absolute inset-0 bg-black/25" />
+                    <div
+                      className="absolute border-2 border-emerald-300 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]"
+                      style={{
+                        left: `${DOCUMENT_GUIDE_RECT.x * 100}%`,
+                        top: `${DOCUMENT_GUIDE_RECT.y * 100}%`,
+                        width: `${DOCUMENT_GUIDE_RECT.width * 100}%`,
+                        height: `${DOCUMENT_GUIDE_RECT.height * 100}%`
+                      }}
+                    />
+                    <div className="absolute left-1/2 -translate-x-1/2 bottom-5 px-3 py-1.5 rounded-xl bg-slate-900/65 text-white text-xs font-bold">
+                      请将纸张完整放入绿色框内并保持平整
+                    </div>
+                  </div>
+                )}
+                {isCameraStarting && (
+                  <div className="absolute inset-0 flex items-center justify-center text-white gap-3 text-sm font-bold bg-slate-900/60">
+                    <Loader2 size={18} className="animate-spin" />
+                    正在启动摄像头...
+                  </div>
+                )}
+              </div>
+              <p className="text-xs font-bold text-slate-500">
+                建议：环境光充足、镜头距离纸张 25~40cm、避免反光与倾斜，可显著提升 OCR 准确率。
+              </p>
+              {capturedCameraQualityText && (
+                <p className="text-xs font-black text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
+                  {capturedCameraQualityText}
+                </p>
+              )}
+              <canvas ref={cameraCanvasRef} className="hidden" />
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleCameraModalCancel}
+                  className="px-5 h-11 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold transition-colors"
+                >
+                  取消
+                </button>
+                {capturedCameraPreviewUrl ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={clearCapturedCameraPreview}
+                      disabled={isCameraUploading}
+                      className="px-5 h-11 rounded-xl bg-slate-200 hover:bg-slate-300 disabled:opacity-60 text-slate-700 text-sm font-bold transition-colors"
+                    >
+                      重新拍照
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCameraCaptureUpload}
+                      disabled={isCameraUploading || isCameraStarting}
+                      className="px-6 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-black transition-colors flex items-center gap-2"
+                    >
+                      {isCameraUploading ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                      确认上传
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleCameraCapturePreview}
+                    disabled={isCameraUploading || isCameraStarting}
+                    className="px-6 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-black transition-colors flex items-center gap-2"
+                  >
+                    <Camera size={16} />
+                    拍照预览
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

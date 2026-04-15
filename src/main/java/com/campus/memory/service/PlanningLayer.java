@@ -30,11 +30,11 @@ public class PlanningLayer {
         ));
         boolean documentIntent = containsAny(normalized, List.of(
             "文档", "资料", "文件", "校史", "政策", "规章", "通知", "报告", "pdf", "doc",
-            "招生", "简章", "报考", "录取", "志愿", "专业介绍", "招生办"
+            "招生", "简章", "报考", "录取", "志愿", "专业介绍", "专业", "学院", "学科", "招生办"
         ));
         boolean dataIntent = containsAny(normalized, List.of(
             "成绩", "分数", "学生", "名单", "统计", "排名", "教务", "多少人", "多少名",
-            "学号", "学籍", "档案", "个人信息", "信息"
+            "学号", "学籍", "档案", "个人信息", "学生信息"
         ));
         boolean nameOnlyQuery = looksLikeChineseName(normalized);
 

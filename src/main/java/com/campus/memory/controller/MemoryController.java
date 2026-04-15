@@ -23,10 +23,30 @@ public class MemoryController {
      * @return 状态信息
      */
     @PostMapping("/add")
-    public String addMemory(@RequestBody java.util.Map<String, Object> payload) {
+    public String addMemory(@RequestBody java.util.Map<String, Object> payload,
+                            @RequestHeader(name = "X-User-Id", required = false) String requesterId,
+                            @RequestHeader(name = "X-User-Role", required = false) String requesterRole) {
         String text = (String) payload.get("text");
         java.util.Map<String, Object> metadata = (java.util.Map<String, Object>) payload.get("metadata");
         if (metadata != null && "true".equals(String.valueOf(metadata.get("isHonor")))) {
+            String role = metadata.get("role") == null ? "" : String.valueOf(metadata.get("role")).trim().toLowerCase();
+            String ownerId = metadata.get("userId") == null ? "" : String.valueOf(metadata.get("userId")).trim();
+            String effectiveRequesterId = requesterId == null ? "" : requesterId.trim();
+            String effectiveRequesterRole = requesterRole == null ? "" : requesterRole.trim().toLowerCase();
+            boolean privateHonor = "private".equals(role);
+            if (privateHonor) {
+                boolean allowedRole = "student".equals(effectiveRequesterRole)
+                    || "teacher".equals(effectiveRequesterRole)
+                    || "admin".equals(effectiveRequesterRole);
+                if (!allowedRole) {
+                    return "无权限：当前角色不允许操作私人荣誉";
+                }
+                if (effectiveRequesterId.isBlank() || ownerId.isBlank() || !effectiveRequesterId.equals(ownerId)) {
+                    return "无权限：仅允许操作自己的私人荣誉";
+                }
+            } else if (!"admin".equals(effectiveRequesterRole)) {
+                return "无权限：仅管理员可操作校园荣誉";
+            }
             return memoryService.addHonor(text, metadata);
         }
         return memoryService.addMemory(text, metadata);
@@ -61,8 +81,30 @@ public class MemoryController {
      * 获取校园荣誉生长树数据
      */
     @GetMapping("/honor-tree")
-    public List<java.util.Map<String, Object>> getHonorTree() {
+    public List<java.util.Map<String, Object>> getHonorTree(
+            @RequestHeader(name = "X-User-Role", required = false) String requesterRole) {
         return memoryService.getHonorTreeData();
+    }
+
+    @GetMapping("/honor-tree/personal")
+    public List<java.util.Map<String, Object>> getPersonalHonorTree(
+            @RequestParam(name = "userId", required = false) String userId,
+            @RequestHeader(name = "X-User-Id", required = false) String requesterId,
+            @RequestHeader(name = "X-User-Role", required = false) String requesterRole) {
+        String effectiveRequesterId = requesterId == null ? "" : requesterId.trim();
+        String effectiveRequesterRole = requesterRole == null ? "" : requesterRole.trim().toLowerCase();
+        String requestedUserId = userId == null ? "" : userId.trim();
+        if ("admin".equals(effectiveRequesterRole)) {
+            return List.of();
+        }
+        String targetUserId = !effectiveRequesterId.isBlank() ? effectiveRequesterId : requestedUserId;
+        if (targetUserId.isBlank()) {
+            return List.of();
+        }
+        if (!requestedUserId.isBlank() && !requestedUserId.equals(targetUserId) && !"admin".equals(effectiveRequesterRole)) {
+            return List.of();
+        }
+        return memoryService.getPersonalHonorTreeData(targetUserId);
     }
 
     @PostMapping("/honor-narrative")

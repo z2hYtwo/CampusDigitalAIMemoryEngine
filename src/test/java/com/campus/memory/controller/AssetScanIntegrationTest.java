@@ -2,6 +2,7 @@ package com.campus.memory.controller;
 
 import com.campus.memory.service.AssetService;
 import com.campus.memory.service.MemoryService;
+import com.campus.memory.service.WhisperAsrService;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 class AssetScanIntegrationTest {
@@ -30,6 +33,9 @@ class AssetScanIntegrationTest {
     @Mock
     private MemoryService memoryService;
 
+    @Mock
+    private WhisperAsrService whisperAsrService;
+
     private AssetService assetService;
 
     private AssetController assetController;
@@ -37,13 +43,13 @@ class AssetScanIntegrationTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        assetService = new AssetService(minioClient, memoryService);
+        assetService = new AssetService(minioClient, memoryService, whisperAsrService);
         
         // 设置 AssetService 的私有字段
         ReflectionTestUtils.setField(assetService, "bucketName", "test-bucket");
         ReflectionTestUtils.setField(assetService, "ocrEnabled", false); // 测试环境禁用真实 OCR
 
-        assetController = new AssetController(minioClient, memoryService, assetService);
+        assetController = new AssetController(minioClient, memoryService, assetService, whisperAsrService);
         ReflectionTestUtils.setField(assetController, "bucketName", "test-bucket");
     }
 
@@ -61,10 +67,10 @@ class AssetScanIntegrationTest {
         aiResult.put("isHonor", false);
         aiResult.put("summary", "关于校园历史的文档摘要");
         
-        when(memoryService.classifyAsset(anyString(), anyString(), anyString())).thenReturn(aiResult);
+        when(memoryService.classifyAsset(anyString(), anyString(), anyString(), isNull())).thenReturn(aiResult);
 
         // 3. 执行控制器方法
-        Map<String, Object> response = assetController.scanCallback(file, "SCANNER-001", null, null, null);
+        Map<String, Object> response = assetController.scanCallback(file, "SCANNER-001", null, null, null, null);
 
         // 4. 验证结果
         assertEquals("success", response.get("status"));
@@ -96,10 +102,10 @@ class AssetScanIntegrationTest {
         aiResult.put("isHonor", false);
         aiResult.put("extractedEntities", java.util.Arrays.asList("实体A", "实体B"));
         
-        when(memoryService.classifyAsset(anyString(), anyString(), anyString())).thenReturn(aiResult);
+        when(memoryService.classifyAsset(anyString(), anyString(), anyString(), isNull())).thenReturn(aiResult);
 
         // 3. 执行控制器方法
-        assetController.scanCallback(file, "SCANNER-003", null, null, null);
+        assetController.scanCallback(file, "SCANNER-003", null, null, null, null);
 
         // 4. 验证 MemoryService.addMemory 被调用
         ArgumentCaptor<Map<String, Object>> metadataCaptor = ArgumentCaptor.forClass(Map.class);
@@ -128,10 +134,10 @@ class AssetScanIntegrationTest {
         aiResult.put("honorYear", "2023");
         aiResult.put("summary", "张三获得的省级一等奖");
         
-        when(memoryService.classifyAsset(anyString(), anyString(), anyString())).thenReturn(aiResult);
+        when(memoryService.classifyAsset(anyString(), anyString(), anyString(), isNull())).thenReturn(aiResult);
 
         // 3. 执行控制器方法
-        Map<String, Object> response = assetController.scanCallback(file, "SCANNER-002", null, null, null);
+        Map<String, Object> response = assetController.scanCallback(file, "SCANNER-002", null, null, null, null);
 
         // 4. 验证结果
         assertEquals("success", response.get("status"));
@@ -148,5 +154,41 @@ class AssetScanIntegrationTest {
         assertEquals("省级", capturedMetadata.get("honorLevel"));
         assertEquals("学术", capturedMetadata.get("honorCategory"));
         assertEquals("2023", capturedMetadata.get("honorYear"));
+    }
+
+    @Test
+    void testScanCallbackFlow_VideoAssetUsesWhisperAndStoresMultimediaMetadata() throws Exception {
+        byte[] content = "mock-video-content".getBytes();
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "campus_promo.mp4", "video/mp4", content);
+
+        WhisperAsrService.TranscriptionResult transcription =
+                new WhisperAsrService.TranscriptionResult("这是校园宣传片解说词", "zh");
+        when(whisperAsrService.transcribe(any(byte[].class), eq("campus_promo.mp4"), eq("video/mp4"), isNull()))
+                .thenReturn(transcription);
+
+        Map<String, Object> aiResult = new HashMap<>();
+        aiResult.put("category", "校史");
+        aiResult.put("isHonor", false);
+        when(memoryService.classifyAsset(anyString(), anyString(), anyString(), isNull())).thenReturn(aiResult);
+
+        Map<String, Object> response = assetController.scanCallback(file, "SCANNER-004", null, null, null, null);
+
+        assertEquals("success", response.get("status"));
+        verify(whisperAsrService, times(1))
+                .transcribe(any(byte[].class), eq("campus_promo.mp4"), eq("video/mp4"), isNull());
+
+        ArgumentCaptor<String> searchableTextCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Map<String, Object>> metadataCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(memoryService, times(1)).addMemory(searchableTextCaptor.capture(), metadataCaptor.capture());
+
+        String searchableText = searchableTextCaptor.getValue();
+        Map<String, Object> metadata = metadataCaptor.getValue();
+
+        assertTrue(searchableText.contains("这是校园宣传片解说词"));
+        assertTrue(searchableText.contains("媒体类型: 视频"));
+        assertEquals("multimedia", metadata.get("sourceType"));
+        assertEquals("视频", metadata.get("mediaType"));
+        assertEquals("zh", metadata.get("recognizedLanguage"));
     }
 }

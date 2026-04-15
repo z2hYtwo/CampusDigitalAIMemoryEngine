@@ -7,9 +7,9 @@ spring:
       max-request-size: 100MB
       enabled: true
   datasource:
-    url: jdbc:mysql://localhost:3306/cdame?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=GMT%2B8&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
-    username: cdame_user
-    password: cdame_pass
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/cdame?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=GMT%2B8&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true}
+    username: ${SPRING_DATASOURCE_USERNAME:cdame_user}
+    password: ${SPRING_DATASOURCE_PASSWORD:cdame_pass}
     driver-class-name: com.mysql.cj.jdbc.Driver
   sql:
     init:
@@ -23,38 +23,59 @@ spring:
 
 # Milvus 配置
 milvus:
-  host: localhost
-  port: 19530
-  collection-name: campus_memory_v3 # 维度变化(1536->1024)建议更换集合名或清空旧集合
-  dimension: 1024 # Qwen text-embedding-v3 为 1024, OpenAI text-embedding-3-small 为 1536
+  host: ${MILVUS_HOST:localhost}
+  port: ${MILVUS_PORT:19530}
+  collection-name: ${MILVUS_COLLECTION:campus_memory_v4}
+  dimension: ${MILVUS_DIMENSION:1024}
 
 # OpenAI / DeepSeek 配置 (用于 Embedding 和 Chat)
 langchain4j:
-  open-ai:
-    api-key: ${AI_API_KEY:demo}
-    base-url: ${AI_BASE_URL:https://api.openai.com/v1}
-    embedding-model:
-      model-name: text-embedding-3-small
-    chat-model:
-      model-name: gpt-4o-mini
-      temperature: 0.7
   embedding:
-    api-key: sk-59b58141744e434d9eeef93afe63bf21
-    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1/
-    model-name: text-embedding-v3
+    api-key: ${AI_EMBEDDING_API_KEY:your_embedding_api_key}
+    base-url: ${AI_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/}
+    model-name: ${AI_EMBEDDING_MODEL:text-embedding-v3}
   chat:
-    api-key: sk-59b58141744e434d9eeef93afe63bf21
-    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1/
-    model-name: qwen-plus
+    api-key: ${AI_CHAT_API_KEY:your_chat_api_key}
+    base-url: ${AI_CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/}
+    model-name: ${AI_CHAT_MODEL:qwen-plus}
 
 # MinIO 配置
 minio:
-  endpoint: http://localhost:9000
-  access-key: minioadmin
-  secret-key: minioadmin
-  bucket-name: campus-assets
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket-name: ${MINIO_BUCKET:campus-assets}
 
 ocr:
-  enabled: true
-  language: chi_sim+eng
+  enabled: ${OCR_ENABLED:true}
+  language: ${OCR_LANGUAGE:chi_sim+eng}
   tessdata-path: ${TESSDATA_PATH:E:/Tesseract/tessdata}
+
+asr:
+  whisper:
+    enabled: ${ASR_WHISPER_ENABLED:true}
+    mode: ${ASR_WHISPER_MODE:api}
+    api-key: ${ASR_API_KEY:${AI_API_KEY:}}
+    base-url: ${ASR_BASE_URL:https://api.openai.com/v1}
+    model: ${ASR_MODEL:whisper-1}
+    cli-command: ${ASR_CLI_COMMAND:whisper}
+    cli-model: ${ASR_CLI_MODEL:base}
+    cli-model-dir: ${ASR_CLI_MODEL_DIR:}
+    cli-device: ${ASR_CLI_DEVICE:}
+    cli-temp-dir: ${ASR_CLI_TEMP_DIR:}
+    cli-ffmpeg-dir: ${ASR_CLI_FFMPEG_DIR:}
+    language: ${ASR_LANGUAGE:zh}
+    force-simplified-chinese: ${ASR_FORCE_SIMPLIFIED_CHINESE:true}
+    simplified-prompt: ${ASR_SIMPLIFIED_PROMPT:请仅使用简体中文输出转写结果。}
+    send-initial-prompt: ${ASR_SEND_INITIAL_PROMPT:true}
+    normalize-traditional: ${ASR_NORMALIZE_TRADITIONAL:true}
+    timeout-ms: ${ASR_TIMEOUT_MS:30000}
+
+memory:
+  retrieval:
+    topk:
+      default: ${MEMORY_RETRIEVAL_TOPK_DEFAULT:40}
+      multimedia: ${MEMORY_RETRIEVAL_TOPK_MULTIMEDIA:60}
+  indexing:
+    skip-low-info: ${MEMORY_INDEXING_SKIP_LOW_INFO:true}
+    min-effective-chars: ${MEMORY_INDEXING_MIN_EFFECTIVE_CHARS:10}

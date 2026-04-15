@@ -22,6 +22,9 @@ CDAME（Campus Digital AI Memory Engine）不仅是一个检索系统，更是�
 - 资源生命周期管理：上传、预览、同步、删除一致性
 - 权限隔离：guest/student/teacher/admin 多角色安全访问
 - 可观测追踪：返回 trace 信息（意图、阈值、召回量、工具链等）
+- Whisper 语音链路：支持本地 CLI / 远程 API 双模式、麦克风录音转写、输入框回填后再发起问答
+- 摄像头扫描链路：管理员扫描入公共库、教师/学生扫描入私有空间，支持取景框、拍照预览、重拍与确认上传
+- OCR 质量门禁：拍照前执行清晰度/反光/倾斜/覆盖率评分，不达标直接拦截并提示重拍
 
 ## 3. 架构总览
 
@@ -137,7 +140,31 @@ npm run dev
 
 主要配置文件：`src/main/resources/application.yml`
 
-### 7.1 数据源
+### 7.1 快速环境变量模板
+
+为了方便快速部署，你可以创建一个 `.env` 文件（或在 IDE 中设置），包含以下核心配置：
+
+```bash
+# 数据库配置
+SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/cdame?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8
+SPRING_DATASOURCE_USERNAME=cdame_user
+SPRING_DATASOURCE_PASSWORD=cdame_pass
+
+# AI 模型配置 (支持 OpenAI 兼容接口，如 DeepSeek, Qwen)
+AI_CHAT_API_KEY=your_chat_api_key
+AI_CHAT_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/
+AI_CHAT_MODEL=qwen-plus
+
+AI_EMBEDDING_API_KEY=your_embedding_api_key
+AI_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/
+AI_EMBEDDING_MODEL=text-embedding-v3
+
+# OCR 配置 (需要本地安装 Tesseract)
+TESSDATA_PATH=C:/Program Files/Tesseract-OCR/tessdata
+OCR_LANGUAGE=chi_sim+eng
+```
+
+### 7.2 数据源
 
 - `spring.datasource.url`
 - `spring.datasource.username`
@@ -170,6 +197,17 @@ npm run dev
 - `ocr.language`（如 `chi_sim+eng`）
 - `ocr.tessdata-path`（可通过 `TESSDATA_PATH` 环境变量覆盖）
 
+### 7.6 Whisper ASR（语音识别）
+
+- `asr.whisper.mode`：`api` 或 `cli`（本地部署建议 `cli`）
+- `asr.whisper.cli-command`：本地命令路径（如 `D:\miniconda\Scripts\whisper.exe`）
+- `asr.whisper.cli-device`：`cpu` 或 `cuda`
+- `asr.whisper.cli-temp-dir`：临时音频与输出目录（建议使用纯英文路径）
+- `asr.whisper.cli-ffmpeg-dir`：`ffmpeg.exe` 所在目录（如 `E:\FFmpeg\ffmpeg\bin`）
+- `asr.whisper.force-simplified-chinese`：中文识别时是否强制偏向简体输出
+- `asr.whisper.simplified-prompt`：简体提示词（默认：请仅使用简体中文输出转写结果。）
+- `asr.whisper.timeout-ms`：识别超时毫秒数
+
 ## 8. 权限模型
 
 系统角色：
@@ -184,6 +222,8 @@ npm run dev
 - 通过请求头 `X-User-Id`、`X-User-Role` 参与权限判断
 - 资源访问受 sourceType / ownerId / role 联合约束
 - 敏感操作（如同步、删除）要求管理角色
+- 管理员可使用“摄像头扫描入库”，教师/学生可在私人空间进行“拍照预览→确认上传”
+- 管理员不提供私人空间入口，避免治理账号与个人资料混用
 
 ## 9. 主要 API
 
@@ -208,10 +248,14 @@ npm run dev
 - `GET /api/asset/preview-slides`：PPT 预览元信息
 - `GET /api/asset/preview-slide-image`：PPT 单页图片
 - `POST /api/asset/upload`：通用上传
+- `POST /api/asset/physical/scan-callback`：物理终端/摄像头扫描入库（管理员）
 - `POST /api/asset/upload-honor`：荣誉上传
 - `POST /api/asset/link`：外链录入
 - `POST /api/asset/sync`：全量同步到向量库（管理角色）
 - `DELETE /api/asset/delete`：删除资源（权限受控）
+- `POST /api/asset/multimodal/voice`：语音识别后直接问答（ASR + Chat）
+- `POST /api/asset/multimodal/voice/transcribe`：仅语音转写（用于前端回填输入框）
+- `POST /api/asset/multimodal/vision`：视觉输入（OCR + 分类）
 
 ### 9.4 Score
 
@@ -280,9 +324,12 @@ npm run preview
 - 检索结果少或为空：检查 Milvus 连通性、集合维度、同步是否完成
 - 上传成功但问不到：执行 `/api/asset/sync` 或确认解析/OCR链路是否生效
 - OCR 无输出：检查 `tessdata` 语言包与 `ocr.tessdata-path`
+- OCR 文本乱码严重：优先使用摄像头扫描取景框并确保质量评分通过，避免反光、倾斜与虚焦
 - 资源无法预览：检查 MinIO 对象路径、权限头与文件类型
 - 前端请求失败：确认 Vite 代理与后端 8080 端口状态
 - 成绩接口 403：确认请求角色与 `X-User-Id` 是否满足权限条件
+- Whisper 报“未找到输出文件”：优先检查 `ffmpeg` 是否可执行，并配置 `ASR_CLI_FFMPEG_DIR`
+- Whisper 中文出现繁体：开启 `ASR_FORCE_SIMPLIFIED_CHINESE=true` 并设置 `ASR_LANGUAGE=zh`
 
 ## 15. 安全建议
 

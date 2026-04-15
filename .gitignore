@@ -29,6 +29,12 @@ out/
 Thumbs.db
 desktop.ini
 
+# 前端构建产物与依赖
+node_modules/
+dist/
+dist-ssr/
+*.local
+
 # 本地数据存储与 OCR 数据 (避免提交 MinIO 的数据和本地扫描文件夹)
 volumes/
 tessdata/

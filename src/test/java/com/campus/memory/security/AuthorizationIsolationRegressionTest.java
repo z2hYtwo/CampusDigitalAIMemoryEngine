@@ -7,6 +7,7 @@ import com.campus.memory.service.AssetService;
 import com.campus.memory.service.MemoryService;
 import com.campus.memory.service.PlanningLayer;
 import com.campus.memory.service.ScoreService;
+import com.campus.memory.service.WhisperAsrService;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -93,7 +94,12 @@ class AuthorizationIsolationRegressionTest {
 
     @Test
     void adminShouldNotListOrReadTeacherPrivateSpace() throws Exception {
-        AssetController assetController = new AssetController(Mockito.mock(MinioClient.class), Mockito.mock(MemoryService.class), Mockito.mock(AssetService.class));
+        AssetController assetController = new AssetController(
+            Mockito.mock(MinioClient.class),
+            Mockito.mock(MemoryService.class),
+            Mockito.mock(AssetService.class),
+            Mockito.mock(WhisperAsrService.class)
+        );
 
         boolean listAccess = invokeBooleanPrivate(
             assetController,
@@ -118,7 +124,12 @@ class AuthorizationIsolationRegressionTest {
 
     @Test
     void studentShouldReadOwnPrivateSpace() throws Exception {
-        AssetController assetController = new AssetController(Mockito.mock(MinioClient.class), Mockito.mock(MemoryService.class), Mockito.mock(AssetService.class));
+        AssetController assetController = new AssetController(
+            Mockito.mock(MinioClient.class),
+            Mockito.mock(MemoryService.class),
+            Mockito.mock(AssetService.class),
+            Mockito.mock(WhisperAsrService.class)
+        );
 
         boolean readAccess = invokeBooleanPrivate(
             assetController,
