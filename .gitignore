@@ -15,8 +15,8 @@ target/
 out/
 
 # BMAD 相关配置 (AI 助手规则文件)
-._bmad/
-._bmad-output/
+_bmad/
+_bmad-output/
 .trae/
 .cursor/
 .windsurf/
