@@ -1,366 +1,166 @@
-# 校园数字化记忆引擎（CDAME）
+# 🏛️ Campus Digital AI Memory Engine (CDAME)
+### —— 校园数字化记忆引擎：让校园记忆“活起来”
 
-让校园记忆“会说话”、让知识资产“能生长”的智能中枢系统。  
-面向“校史资料 + 荣誉档案 + 学业数据 + 智能问答”全场景，CDAME 以 AI 为引擎，把分散在文档、图片、音视频与结构化数据中的校园知识，重构为可检索、可追溯、可解释、可持续演进的数字记忆网络。
+<div align="center">
+  <p align="center">
+    <img src="https://img.shields.io/badge/Version-4.0.0-blue?style=for-the-badge" alt="Version">
+    <img src="https://img.shields.io/badge/Framework-Spring%20Boot%203.2-green?style=for-the-badge&logo=springboot" alt="Spring Boot">
+    <img src="https://img.shields.io/badge/Frontend-React%2019-61DAFB?style=for-the-badge&logo=react" alt="React">
+    <img src="https://img.shields.io/badge/VectorDB-Milvus-007ACC?style=for-the-badge" alt="Milvus">
+  </p>
+  <p align="center">
+    <strong>基于 RAG 架构的多模态 AI 知识中枢，深度集成智能问答、文件溯源、荣誉体系与学业洞察。</strong>
+  </p>
+  <p align="center">
+    <a href="#-项目愿景">项目愿景</a> •
+    <a href="#-核心特性">核心特性</a> •
+    <a href="#-技术架构">技术架构</a> •
+    <a href="#-快速开始">快速开始</a> •
+    <a href="#-安全合规">安全合规</a>
+  </p>
+</div>
 
-## 1. 项目定位
+---
 
-CDAME（Campus Digital AI Memory Engine）不仅是一个检索系统，更是一套面向高校的“数字文化操作系统”。  
-它融合 **RAG 检索增强生成**、**多模态资源管理** 与 **RBAC 权限控制**，在“技术可落地”与“文化可传承”之间建立统一底座，核心价值是：
+## 🌟 项目愿景
 
-- 让校史与多媒体资料从“静态陈列”升级为“可交互知识资产”
-- 让 AI 回答从“只给结论”升级为“结论 + 证据 + 来源”的可信表达
-- 让游客、学生、教师、管理员在同一平台实现“统一入口、分级可见、安全可控”
-- 让学业数据与文档知识打通，形成“检索、分析、决策”一体化体验
+在传统的高校信息化建设中，校史资料、荣誉档案、学生学业数据往往处于“孤岛”状态。**CDAME** 的核心使命是：
+> **“重构校园记忆，赋予数据灵魂。”**
 
-## 2. 核心能力
+我们通过 AI 引擎，将分散在 PDF、图片、音视频、Excel 中的碎片化知识，编织成一张**可检索、可追溯、可交互**的数字记忆网络。
 
-- 智能问答：基于语义检索 + 数据工具调用的混合编排
-- 文档与媒体检索：支持 PDF/Office/图片/音视频/外链资源
-- 荣誉树：荣誉事件聚合展示与叙事生成
-- 学业洞察：成绩统计、专业维度分析、学生个体画像
-- 资源生命周期管理：上传、预览、同步、删除一致性
-- 权限隔离：guest/student/teacher/admin 多角色安全访问
-- 可观测追踪：返回 trace 信息（意图、阈值、召回量、工具链等）
-- Whisper 语音链路：支持本地 CLI / 远程 API 双模式、麦克风录音转写、输入框回填后再发起问答
-- 摄像头扫描链路：管理员扫描入公共库、教师/学生扫描入私有空间，支持取景框、拍照预览、重拍与确认上传
-- OCR 质量门禁：拍照前执行清晰度/反光/倾斜/覆盖率评分，不达标直接拦截并提示重拍
+---
 
-## 3. 架构总览
+## 🛠️ 核心特性
 
+### 1. 🧠 混合动力智能问答 (Hybrid RAG)
+不仅是语义检索，更是“意图理解 + 数据调用”的深度结合。
+- **语义召回**：基于 Milvus 向量数据库实现海量文档的精准匹配。
+- **结构化洞察**：通过自然语言直接查询 MySQL 成绩数据（Score Tool）。
+- **可信溯源**：返回 Trace 信息，清晰展示 AI 思考路径及引用文件。
+
+### 2. 📄 多模态资源中枢
+打破文件格式壁垒，实现全场景解析。
+- **文档全解析**：PDF, Word, Excel, Markdown 深度文本提取。
+- **OCR 视觉链路**：集成 Tesseract，支持拍照扫描、清晰度检测、反光门禁。
+- **语音转写**：Whisper ASR 支持实时录音转写，让语音交互成为可能。
+
+### 3. 🌲 荣誉叙事树 (Honor Tree)
+将冷冰冰的荣誉名单转化为生动的时间轴与叙事流，支持：
+- 荣誉事件自动聚合。
+- 情感化叙事生成。
+- 历史关联深度挖掘。
+
+### 4. 📊 学生画像与学业洞察
+基于大数据分析，为每位学生生成专属“数字镜像”：
+- 专业维度多维分析。
+- 成绩趋势预测与预警。
+- 个性化 AI 助学建议。
+
+---
+
+## 🏗️ 技术架构
+
+### 系统流图 (System Flow)
 ```mermaid
-flowchart LR
-  A[React + TypeScript 前端] --> B[Spring Boot API]
-  B --> C[PlanningLayer 预路由]
-  C --> D[MemoryService 智能编排]
-  D --> E[Milvus 向量检索]
-  D --> F[ScoreService MySQL数据工具]
-  D --> G[MinIO 资产存储]
-  G --> H[Tika/POI/Tess4J 文本提取与OCR]
-  H --> E
-  D --> I[LLM Chat/Embedding]
-  D --> J[OrchestrationContext Trace与产物聚合]
-  J --> A
+graph LR
+    subgraph Client ["🎨 前端交互层"]
+        A[React 19 SPA]
+        B[Whisper ASR 语音]
+        C[OCR 智能相机]
+    end
+
+    subgraph Orchestrator ["🧠 智能编排层"]
+        D[Planning Layer]
+        E[Memory Service]
+        F[Tool Calling Registry]
+    end
+
+    subgraph Storage ["💾 混合存储层"]
+        G[(Milvus 向量)]
+        H[(MySQL 8 结构化)]
+        I[(MinIO 对象存储)]
+    end
+
+    subgraph Engines ["⚡ 处理引擎层"]
+        J[LLM: Qwen/DeepSeek]
+        K[OCR: Tesseract]
+        L[Parse: Tika/POI]
+    end
+
+    A <--> D
+    D --> E
+    E <--> F
+    E <--> G & H & I
+    E <--> J & K & L
 ```
 
-## 4. 技术栈
+### 技术栈详情
+| 维度 | 技术选型 | 核心价值 |
+| :--- | :--- | :--- |
+| **后端** | Spring Boot 3.2 + Java 17 | 企业级稳定性与高性能异步处理 |
+| **AI 编排** | LangChain4j | 统一的模型抽象与工具链调用 |
+| **前端** | React 19 + Vite + Tailwind | 极致的响应速度与现代 UI/UX |
+| **向量数据库** | Milvus | 支持百万级 Embedding 的毫秒级召回 |
+| **对象存储** | MinIO | 兼容 S3 协议，安全存储多媒体资产 |
+| **OCR/ASR** | Tesseract / Whisper | 赋能多模态感知能力 |
 
-### 后端
+---
 
-- Java 17
-- Spring Boot 3.2.4
-- LangChain4j 0.29.1（Chat / Embedding / Tool Calling）
-- Milvus（向量数据库）
-- MySQL 8（结构化数据）
-- MinIO（对象存储）
-- Apache Tika + Apache POI（文档解析）
-- Tess4J（OCR）
-- EasyExcel（Excel 导入）
+## 🏁 快速开始
 
-### 前端
-
-- React 19 + TypeScript
-- Vite 7
-- React Router
-- Axios
-- ECharts（荣誉树/图表）
-- Tailwind CSS
-
-## 5. 目录结构
-
-```text
-AI Campus Memory Engine
-├── src/main/java/com/campus/memory/
-│   ├── controller/               # API 控制器（memory/asset/auth/score/import）
-│   ├── service/                  # 业务核心（RAG/规划层/成绩洞察等）
-│   ├── config/                   # AI、Milvus 等配置
-│   ├── dto/                      # 请求响应模型
-│   └── context/                  # 编排上下文与 trace 聚合
-├── src/main/resources/
-│   ├── application.yml           # 后端配置
-│   ├── schema.sql                # 数据库建表脚本
-│   └── data.sql                  # 初始化数据
-├── cdame-front/
-│   ├── src/
-│   │   ├── App.tsx               # 主页面、路由、预览联动
-│   │   └── components/           # Navbar/HonorTree/PrivateSpace 等
-│   ├── package.json
-│   └── vite.config.ts            # 开发代理 /api -> 8080
-├── docker-compose.yml            # Milvus + MinIO + MySQL 一键依赖
-└── pom.xml
-```
-
-## 6. 快速开始
-
-### 6.1 环境要求
-
-- JDK 17+
-- Maven 3.9+ (可选，项目已内置 `./mvnw` 包装器)
-- Node.js 20+（建议 LTS）
-- Docker Desktop（用于 Milvus/MinIO/MySQL）
-
-### 6.2 启动基础依赖（Docker）
-
-在项目根目录执行：
-
+### 🚀 一键环境初始化 (Docker)
+项目已预配置完整的中间件堆栈：
 ```bash
-docker compose up -d
+# 启动 MySQL, Milvus, MinIO
+docker-compose up -d
 ```
 
-默认端口：
-
-- MySQL: `3306`
-- MinIO API: `9000`
-- MinIO Console: `9001`
-- Milvus: `19530`
-- Milvus Health: `9091`
-- Attu: `8000`
-
-### 6.3 启动后端
-
-```bash
-./mvnw clean spring-boot:run
-```
-
-默认后端地址：`http://localhost:8080`
-
-### 6.4 启动前端
-
-```bash
-cd cdame-front
-npm install
-npm run dev
-```
-
-默认前端地址：`http://localhost:5173`
-
-前端已配置开发代理：`/api` 自动转发到 `http://localhost:8080`。
-
-## 7. 配置说明
-
-主要配置文件：`src/main/resources/application.yml`
-
-### 7.1 快速环境变量模板
-
-为了方便快速部署，你可以创建一个 `.env` 文件（或在 IDE 中设置），包含以下核心配置：
-
-```bash
-# 数据库配置
-SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/cdame?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8
-SPRING_DATASOURCE_USERNAME=cdame_user
-SPRING_DATASOURCE_PASSWORD=cdame_pass
-
-# AI 模型配置 (支持 OpenAI 兼容接口，如 DeepSeek, Qwen)
-AI_CHAT_API_KEY=your_chat_api_key
+### ⚙️ 极简配置 (.env)
+在项目根目录创建 `.env` 文件，填入你的 AI 密钥：
+```ini
+# AI 配置
+AI_CHAT_API_KEY=sk-xxxx
 AI_CHAT_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/
-AI_CHAT_MODEL=qwen-plus
 
-AI_EMBEDDING_API_KEY=your_embedding_api_key
-AI_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/
-AI_EMBEDDING_MODEL=text-embedding-v3
-
-# OCR 配置 (需要本地安装 Tesseract)
-TESSDATA_PATH=C:/Program Files/Tesseract-OCR/tessdata
-OCR_LANGUAGE=chi_sim+eng
+# 数据库密码
+SPRING_DATASOURCE_PASSWORD=your_password
 ```
 
-### 7.2 数据源
-
-- `spring.datasource.url`
-- `spring.datasource.username`
-- `spring.datasource.password`
-
-### 7.2 向量库
-
-- `milvus.host`
-- `milvus.port`
-- `milvus.dimension`
-
-### 7.3 大模型与向量模型
-
-建议通过环境变量管理密钥，不要将密钥写入仓库：
-
-- `AI_API_KEY`
-- `AI_BASE_URL`
-- 或自定义 `langchain4j.embedding.*` 与 `langchain4j.chat.*`
-
-### 7.4 对象存储
-
-- `minio.endpoint`
-- `minio.access-key`
-- `minio.secret-key`
-- `minio.bucket-name`
-
-### 7.5 OCR
-
-- `ocr.enabled`
-- `ocr.language`（如 `chi_sim+eng`）
-- `ocr.tessdata-path`（可通过 `TESSDATA_PATH` 环境变量覆盖）
-
-### 7.6 Whisper ASR（语音识别）
-
-- `asr.whisper.mode`：`api` 或 `cli`（本地部署建议 `cli`）
-- `asr.whisper.cli-command`：本地命令路径（如 `D:\miniconda\Scripts\whisper.exe`）
-- `asr.whisper.cli-device`：`cpu` 或 `cuda`
-- `asr.whisper.cli-temp-dir`：临时音频与输出目录（建议使用纯英文路径）
-- `asr.whisper.cli-ffmpeg-dir`：`ffmpeg.exe` 所在目录（如 `E:\FFmpeg\ffmpeg\bin`）
-- `asr.whisper.force-simplified-chinese`：中文识别时是否强制偏向简体输出
-- `asr.whisper.simplified-prompt`：简体提示词（默认：请仅使用简体中文输出转写结果。）
-- `asr.whisper.timeout-ms`：识别超时毫秒数
-
-## 8. 权限模型
-
-系统角色：
-
-- `guest`：可使用公共检索与荣誉树只读浏览
-- `student`：可访问个人相关学业洞察与私有空间
-- `teacher`：可访问教师角色范围内资源与功能
-- `admin`：具备资源治理能力（如全量同步、删除等）
-
-关键策略：
-
-- 通过请求头 `X-User-Id`、`X-User-Role` 参与权限判断
-- 资源访问受 sourceType / ownerId / role 联合约束
-- 敏感操作（如同步、删除）要求管理角色
-- 管理员可使用“摄像头扫描入库”，教师/学生可在私人空间进行“拍照预览→确认上传”
-- 管理员不提供私人空间入口，避免治理账号与个人资料混用
-
-## 9. 主要 API
-
-### 9.1 Auth
-
-- `POST /api/auth/login`：登录
-- `POST /api/auth/register`：注册（仅 student/teacher）
-
-### 9.2 Memory
-
-- `POST /api/memory/add`：新增记忆（含荣誉分支）
-- `GET /api/memory/search`：兼容搜索接口
-- `POST /api/memory/search`：主搜索入口（返回 answer/relevantFiles/trace）
-- `GET /api/memory/honor-tree`：荣誉树数据
-- `POST /api/memory/honor-narrative`：荣誉叙事生成
-
-### 9.3 Asset
-
-- `GET /api/asset/list`：资源列表
-- `GET /api/asset/download/{objectName}` / `GET /api/asset/view`：原始资源查看/下载
-- `GET /api/asset/preview-text`：文本预览
-- `GET /api/asset/preview-slides`：PPT 预览元信息
-- `GET /api/asset/preview-slide-image`：PPT 单页图片
-- `POST /api/asset/upload`：通用上传
-- `POST /api/asset/physical/scan-callback`：物理终端/摄像头扫描入库（管理员）
-- `POST /api/asset/upload-honor`：荣誉上传
-- `POST /api/asset/link`：外链录入
-- `POST /api/asset/sync`：全量同步到向量库（管理角色）
-- `DELETE /api/asset/delete`：删除资源（权限受控）
-- `POST /api/asset/multimodal/voice`：语音识别后直接问答（ASR + Chat）
-- `POST /api/asset/multimodal/voice/transcribe`：仅语音转写（用于前端回填输入框）
-- `POST /api/asset/multimodal/vision`：视觉输入（OCR + 分类）
-
-### 9.4 Score
-
-- `GET /api/score/statistics`：成绩仪表统计
-- `GET /api/score/major-statistics`：专业维度统计
-- `GET /api/score/student-insights`：学生综合洞察
-
-### 9.5 Import
-
-- `POST /api/import/students`：导入学籍 Excel
-- `POST /api/import/courses`：导入课程 Excel
-- `POST /api/import/scores`：导入成绩 Excel
-
-## 10. 数据模型
-
-核心表（见 `schema.sql`）：
-
-- `students`：学生基础信息
-- `courses`：课程信息
-- `scores`：学生成绩与课程关联
-- `users`：系统登录与角色
-- `student_scores`：兼容历史逻辑的摘要表
-
-## 11. 检索与回答链路
-
-1. 前端向 `/api/memory/search` 发起请求并附带角色/会话信息
-2. `PlanningLayer` 对查询进行 DOCUMENT / DATA / MIXED 预路由
-3. `MemoryService` 驱动 Assistant 执行工具调用
-4. 文档类问题走向量检索 + 权限过滤 + 混合重排
-5. 数据类问题走 `ScoreService`（MySQL）
-6. 返回 `answer + relevantFiles + trace`，前端按引用与资源卡片展示证据
-
-## 12. 前端页面与路由
-
-- `/`：智能问答主页
-- `/private`：私有空间
-- `/history/archives`：档案库
-- `/history/media`：多媒体资源
-- `/history/honor-wall`：荣誉树（游客可只读访问）
-- `/academic/scores`：成绩分析
-- `/policies`：政策查询
-- `/majors`：专业展示
-- `/physical/print`：智能打印与物理交互
-
-## 13. 开发与构建命令
-
-### 后端
-
+### 🛠️ 编译与运行
 ```bash
-./mvnw clean test
+# 后端启动
 ./mvnw spring-boot:run
-./mvnw clean package
+
+# 前端启动
+cd cdame-front && npm install && npm run dev
 ```
 
-### 前端
+---
 
-```bash
-npm run dev
-npm run lint
-npm run build
-npm run preview
-```
+## 🛡️ 安全合规与生产建议
 
-## 14. 常见问题排查
+> [!CAUTION]
+> **生产环境安全加固清单：**
+> 1. **鉴权升级**：默认账号 `admin/admin123` 仅供测试，上线前必须修改。
+> 2. **数据隔离**：确保 `volumes/` 目录不进入 Git，生产环境建议开启 MinIO 加密。
+> 3. **网络防御**：配置后端 CORS 白名单，中间件端口（3306, 19530）严禁外网映射。
 
-- 检索结果少或为空：检查 Milvus 连通性、集合维度、同步是否完成
-- 上传成功但问不到：执行 `/api/asset/sync` 或确认解析/OCR链路是否生效
-- OCR 无输出：检查 `tessdata` 语言包与 `ocr.tessdata-path`
-- OCR 文本乱码严重：优先使用摄像头扫描取景框并确保质量评分通过，避免反光、倾斜与虚焦
-- 资源无法预览：检查 MinIO 对象路径、权限头与文件类型
-- 前端请求失败：确认 Vite 代理与后端 8080 端口状态
-- 成绩接口 403：确认请求角色与 `X-User-Id` 是否满足权限条件
-- Whisper 报“未找到输出文件”：优先检查 `ffmpeg` 是否可执行，并配置 `ASR_CLI_FFMPEG_DIR`
-- Whisper 中文出现繁体：开启 `ASR_FORCE_SIMPLIFIED_CHINESE=true` 并设置 `ASR_LANGUAGE=zh`
+---
 
-## 15. 生产环境部署安全建议
+## 🗺️ 路线图 (Roadmap)
+- [x] 多模态 RAG 基础框架
+- [x] 成绩洞察与工具链调用
+- [x] 移动端智能扫描与质量门禁
+- [ ] **Next:** 接入 Rerank 模型提升检索精度
+- [ ] **Next:** 增加离线大模型本地化部署支持 (Ollama)
+- [ ] **Next:** 完善知识图谱 (Knowledge Graph) 关联
 
-为确保系统在生产环境的安全稳定运行，请务必执行以下安全加固措施：
+---
 
-### 15.1 凭证与密钥管理
-- **禁用默认账号**：立即修改 `data.sql` 中初始用户的默认密码（admin/admin123等），或在部署后第一时间通过数据库更新。
-- **环境变量注入**：严禁将 `AI_API_KEY`、数据库密码、MinIO Secret Key 等敏感信息直接写入 `application.yml`。应通过操作系统的环境变量或 Docker Secrets 动态注入。
-- **最小权限原则**：为 MySQL、Milvus、MinIO 创建专用服务账号，仅授予该系统运行所需的最小权限，避免使用 `root` 或 `admin` 账号直接连接。
-
-### 15.2 数据与隐私安全
-- **敏感数据脱敏**：在公开演示或推送到代码仓库前，确保已删除 `volumes/` 目录下的真实数据，并检查 `data.sql` 是否包含真实学生/教职工信息。
-- **文件上传过滤**：在生产环境严格限制上传文件的类型（如仅允许 PDF/JPG/PNG），并设置合理的单文件大小上限。
-- **存储加密**：建议对 MinIO 存储桶开启服务端加密（SSE），保护物理介质上的文档资产。
-
-### 15.3 网络安全加固
-- **启用 HTTPS**：生产环境必须通过 Nginx 或负载均衡器配置 SSL 证书，强制全站 HTTPS 访问。
-- **内网隔离**：将 Milvus、MySQL、MinIO 部署在私有子网中，仅允许后端 API 服务所在的容器访问其端口，不对公网暴露 3306、19530、9000 等端口。
-- **CORS 策略**：在后端配置中严格限制跨域访问的域名白名单，不要使用 `*` 通配符。
-
-### 15.4 审计与监控
-- **访问审计**：开启 Spring Boot 的请求日志记录，监控所有涉及 `Asset` 删除、同步及敏感数据查询的操作。
-- **异常报警**：配置日志监控（如 ELK 堆栈），对频繁出现的 403 错误、登录失败、API 调用超时等异常情况设置实时告警。
-
-## 16. 演进方向
-
-- 引入专用 reranker 提升长文档排序质量
-- 建立自动化评测体系（召回率、准确率、引用一致性）
-- 完善知识图谱化表达，增强荣誉事件关系可视化
-- 增加缓存与异步任务机制，提升高并发稳定性
-
-***
-
-如用于答辩/竞赛展示，建议结合 `trace` 可视化与“回答-证据-原文”联动演示，以突出系统的可解释性和工程落地能力。
+<div align="center">
+  <img src="https://img.shields.io/badge/Maintained%3F-yes-green.svg" alt="Maintained">
+  <img src="https://img.shields.io/badge/Contributions-Welcome-brightgreen.svg" alt="Contributions">
+  <br>
+  <sub>© 2026 AI Campus Memory Engine Team. 基于 Apache-2.0 协议开源。</sub>
+</div>
