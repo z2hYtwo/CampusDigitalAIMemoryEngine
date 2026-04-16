@@ -1,3 +1,10 @@
+# 环境变量配置文件 (存放私密 Key 和密码，严禁提交)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
 # Java 编译产物
 target/
 *.class

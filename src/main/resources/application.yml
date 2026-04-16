@@ -49,7 +49,7 @@ minio:
 ocr:
   enabled: ${OCR_ENABLED:true}
   language: ${OCR_LANGUAGE:chi_sim+eng}
-  tessdata-path: ${TESSDATA_PATH:E:/Tesseract/tessdata}
+  tessdata-path: ${TESSDATA_PATH:/usr/share/tesseract-ocr/4.00/tessdata}
 
 asr:
   whisper:
