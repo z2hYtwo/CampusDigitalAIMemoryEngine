@@ -56,3 +56,6 @@ logs/
 *.tmp
 *.bak
 *.swp
+
+*.xlsx
+*.xls
