@@ -5,6 +5,9 @@
 
 随着大语言模型（LLM）的爆发，**RAG（检索增强生成）** 技术为这些沉睡的数据提供了灵魂。本文将基于开源项目 **Campus Digital AI Memory Engine (CDAME)** 的研发实践，深度探讨如何构建一个具备多模态感知能力的数字化记忆引擎，并探讨其从数字化校园向企业知识库、个人第二大脑等通用场景扩展的技术逻辑。
 
+> 🚀 **项目已在 GitHub 开源**：[CampusDigitalAIMemoryEngine](https://github.com/z2hYtwo/CampusDigitalAIMemoryEngine)
+> (如果本文对你有帮助，欢迎点个 Star ⭐️ 支持一下！)
+
 ---
 
 ## **一、 核心愿景：超越搜索，重塑“记忆”**
