@@ -107,6 +107,33 @@ graph LR
 
 ---
 
+## 🗄️ 数据库配置与初始化 (Database Guide)
+
+本项目采用 **混合存储架构**，分别处理结构化数据、向量数据与二进制文件。
+
+### 1. 关系型数据库 (MySQL 8.0)
+用于存储成绩、用户信息、文件元数据等结构化信息。
+- **自动初始化**：项目启动时会自动执行 `src/main/resources/schema.sql` (表结构) 和 `data.sql` (初始数据)。
+- **配置方式**：推荐在 `.env` 中设置以下变量：
+  - `SPRING_DATASOURCE_URL`: 数据库连接地址。
+  - `SPRING_DATASOURCE_USERNAME`: 数据库用户名。
+  - `SPRING_DATASOURCE_PASSWORD`: 数据库密码。
+
+### 2. 向量数据库 (Milvus)
+用于存储文档切片的向量特征，支持毫秒级的语义检索。
+- **配置方式**：
+  - `MILVUS_HOST`: Milvus 服务地址 (默认 `localhost`)。
+  - `MILVUS_PORT`: 端口 (默认 `19530`)。
+  - `MILVUS_COLLECTION`: 向量集合名称。
+
+### 3. 对象存储 (MinIO)
+用于存储原始 PDF、图片等资源文件。
+- **配置方式**：
+  - `MINIO_ENDPOINT`: MinIO API 地址。
+  - `MINIO_ACCESS_KEY` & `MINIO_SECRET_KEY`: 访问凭证。
+
+---
+
 ## 🏁 快速开始
 
 ### 🚀 一键环境初始化 (Docker)
@@ -117,14 +144,23 @@ docker-compose up -d
 ```
 
 ### ⚙️ 极简配置 (.env)
-在项目根目录创建 `.env` 文件，填入你的 AI 密钥：
+在项目根目录创建 `.env` 文件，填入你的配置信息（推荐方式）：
 ```ini
-# AI 配置
+# --- AI 配置 ---
 AI_CHAT_API_KEY=sk-xxxx
 AI_CHAT_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/
+AI_CHAT_MODEL=qwen-plus
 
-# 数据库密码
+# --- 数据库配置 ---
+SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/cdame?useUnicode=true&characterEncoding=utf8
+SPRING_DATASOURCE_USERNAME=root
 SPRING_DATASOURCE_PASSWORD=your_password
+
+# --- 中间件配置 ---
+MILVUS_HOST=localhost
+MINIO_ENDPOINT=http://localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
 ```
 
 ### 🛠️ 编译与运行
