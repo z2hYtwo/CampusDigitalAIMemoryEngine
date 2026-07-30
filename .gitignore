@@ -1,68 +1,75 @@
+# ==================== 安全敏感文件 ====================
 # 环境变量配置文件 (存放私密 Key 和密码，严禁提交)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 
-# Java 编译产物
+# ==================== Java / Maven ====================
 target/
 *.class
-
-# Maven 临时文件 (Maven Wrapper 的 jar 必须保留，以便其他人直接运行)
-# .mvn/wrapper/maven-wrapper.jar
+*.jar
+*.war
+*.ear
 .mvn/wrapper/maven-wrapper.properties
 
-# IDEA 个人配置 (必须排除，否则会把个人路径和配置带给队友)
+# JVM crash logs
+hs_err_pid*.log
+replay_pid*.log
+
+# ==================== IDE 配置 ====================
 .idea/
 *.iml
 *.iws
 *.ipr
 .idea_modules/
 out/
+.vscode/
 
-# BMAD 相关配置 (AI 助手规则文件)
+# ==================== AI 助手规则文件 ====================
 _bmad/
 _bmad-output/
 .trae/
 .cursor/
 .windsurf/
+.claude/
 
-# VS Code 配置 (如果有人用 VS Code)
-.vscode/
-
-# 系统临时文件
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# 前端构建产物与依赖
+# ==================== 前端 ====================
 node_modules/
 dist/
 dist-ssr/
 *.local
 
-# 本地数据存储与 OCR 数据 (避免提交 MinIO 的数据和本地扫描文件夹)
+# Python 虚拟环境
+**/whisper_env/
+**/__pycache__/
+*.pyc
+
+# ==================== Docker 本地数据 ====================
 volumes/
 tessdata/
+
+# ==================== 本地文件/路径 ====================
 E:/ScannerDrop/
 temp/
 data/
 
-# 编译生成的打包文件
-*.jar
-*.war
-*.ear
-*.pdf
-
-# 日志文件
+# ==================== 日志文件 ====================
 *.log
 logs/
+debug.log
 
-# 操作系统/开发环境临时文件
+# ==================== 系统临时文件 ====================
+.DS_Store
+Thumbs.db
+desktop.ini
 *.tmp
 *.bak
 *.swp
+*~
 
+# ==================== 文档/数据文件 (不适合版本控制) ====================
+*.pdf
 *.xlsx
 *.xls
+*.doc
+*.docx
